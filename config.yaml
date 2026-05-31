@@ -1,0 +1,73 @@
+# Dust-Storm Onset Prediction — project configuration
+
+project:
+  name: dust-storm-forecast-saudi
+  study_start: "2018-01-01"
+  study_end: "2020-12-31"
+  prediction_horizon_hours: 24
+  visibility_threshold_m: 1000.0
+  albedo_radius_m: 200000
+  albedo_doy_window: 15
+
+baseline_years: [2015, 2016, 2017]
+study_years: [2018, 2019, 2020]
+
+stations:
+  riyadh:
+    wmo_id: "404380"
+    wban: "99999"
+    lat: 24.93
+    lon: 46.72
+  hafar:
+    wmo_id: "404190"
+    wban: "99999"
+    lat: 28.32
+    lon: 45.52
+  sharurah:
+    wmo_id: "410240"
+    wban: "99999"
+    lat: 17.47
+    lon: 47.12
+
+paths:
+  data_raw: data/raw
+  data_processed: data/processed
+  data_final: data/final
+  data_synthetic: data/synthetic
+  outputs: outputs
+  results: results
+
+model:
+  target: dust_event_next_day
+  group_col: station
+  n_cv_splits: 5
+  random_state: 42
+  n_bootstrap: 5000
+  confidence_level: 0.95
+  optuna_trials: 60
+  use_optuna: false  # set true for hyperparameter tuning (slower)
+
+era5_variables:
+  - 10m_u_component_of_wind
+  - 10m_v_component_of_wind
+  - 2m_temperature
+  - 2m_dewpoint_temperature
+  - surface_pressure
+  - total_column_water_vapour
+  - boundary_layer_height
+  - soil_temperature_level_1
+  - volumetric_soil_water_layer_1
+  - friction_velocity
+  - total_precipitation
+
+soil_properties:
+  - clay
+  - sand
+  - silt
+  - ocs
+  - bdod
+
+synthetic:
+  enabled: true
+  seed: 42
+  positive_rate: 0.10

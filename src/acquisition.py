@@ -1,0 +1,563 @@
+"""
+Data acquisition from NOAA ISD, MODIS (GEE), ERA5 (CDS), and SoilGrids.
+
+Synthetic mode generates representative CSVs locally so the pipeline runs
+without external API keys or accounts.
+"""
+
+from __future__ import annotations
+
+import io
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import requests
+import yaml
+
+# ---------------------------------------------------------------------------
+# Configuration helpers
+# ---------------------------------------------------------------------------
+
+def load_config(config_path: str | Path = "config.yaml") -> dict:
+    with open(config_path) as f:
+        return yaml.safe_load(f)
+
+
+def get_stations(config: dict) -> dict[str, dict[str, float | str]]:
+    return config["stations"]
+
+
+# ---------------------------------------------------------------------------
+# NOAA ISD visibility (real data)
+# ---------------------------------------------------------------------------
+
+def download_isd_visibility(
+    wmo_id: str,
+    wban: str,
+    year: int,
+) -> pd.DataFrame:
+    """
+    Parse visibility (VIS) from full ISD data files via the `isd` library.
+
+    Returns hourly visibility in metres; negative values are masked as NaN.
+    """
+    import isd
+
+    url = (
+        f"https://www.ncei.noaa.gov/pub/data/noaa/{year}/"
+        f"{wmo_id}-{wban}-{year}.gz"
+    )
+    records = isd.read(url)
+    df = pd.DataFrame(records)[["time", "visibility_distance"]]
+    df.columns = ["datetime", "visibility_m"]
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df = df.set_index("datetime").sort_index()
+    df["visibility_m"] = pd.to_numeric(df["visibility_m"], errors="coerce")
+    df.loc[df["visibility_m"] < 0, "visibility_m"] = float("nan")
+    return df
+
+
+def daily_visibility_flag(
+    vis_df: pd.DataFrame,
+    threshold_m: float = 1000.0,
+) -> pd.Series:
+    """True on any day with at least one hourly visibility observation <= threshold."""
+    below = vis_df["visibility_m"] <= threshold_m
+    daily = below.groupby(below.index.normalize()).max()
+    daily.index = pd.to_datetime(daily.index)
+    return daily.rename("vis_dust_flag")
+
+
+# ---------------------------------------------------------------------------
+# MODIS MCD43A3 albedo via Google Earth Engine (real data)
+# ---------------------------------------------------------------------------
+
+def get_albedo_timeseries(
+    station_name: str,
+    stations: dict,
+    radius_m: int = 200_000,
+    start: str = "2015-01-01",
+    end: str = "2020-12-31",
+) -> pd.DataFrame:
+    """
+    Extract mean shortwave broadband white-sky albedo (MCD43A3) within radius.
+    """
+    import ee
+
+    ee.Initialize()
+
+    coords = stations[station_name]
+    point = ee.Geometry.Point([coords["lon"], coords["lat"]])
+    roi = point.buffer(radius_m)
+
+    collection = (
+        ee.ImageCollection("MODIS/006/MCD43A3")
+        .filterDate(start, end)
+        .filterBounds(roi)
+        .select("Albedo_WSA_shortwave")
+    )
+
+    def reduce_image(image):
+        stats = image.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=roi,
+            scale=500,
+            maxPixels=int(1e9),
+            bestEffort=True,
+        )
+        val = ee.Number(stats.get("Albedo_WSA_shortwave")).multiply(0.001)
+        return (
+            image.set("date", image.date().format("YYYY-MM-dd"))
+            .set("albedo_wsb", val)
+        )
+
+    reduced = collection.map(reduce_image)
+    info = reduced.aggregate_array("albedo_wsb").getInfo()
+    dates = reduced.aggregate_array("date").getInfo()
+
+    df = pd.DataFrame({"date": pd.to_datetime(dates), "albedo_wsb": info})
+    df = df.set_index("date").sort_index()
+    df["station"] = station_name
+    return df
+
+
+# ---------------------------------------------------------------------------
+# MOD09A1 NDVI / NDDI via GEE (real data)
+# ---------------------------------------------------------------------------
+
+def get_mod09a1_timeseries(
+    station_name: str,
+    stations: dict,
+    radius_m: int = 200_000,
+    start: str = "2018-01-01",
+    end: str = "2020-12-31",
+) -> pd.DataFrame:
+    """Extract mean NDVI and NDDI from MOD09A1 8-day composites within radius."""
+    import ee
+
+    ee.Initialize()
+
+    coords = stations[station_name]
+    point = ee.Geometry.Point([coords["lon"], coords["lat"]])
+    roi = point.buffer(radius_m)
+
+    collection = (
+        ee.ImageCollection("MODIS/006/MOD09A1")
+        .filterDate(start, end)
+        .filterBounds(roi)
+        .select(["sur_refl_b01", "sur_refl_b02", "sur_refl_b06"])
+    )
+
+    def compute_indices(image):
+        red = image.select("sur_refl_b01").multiply(0.0001)
+        nir = image.select("sur_refl_b02").multiply(0.0001)
+        swir = image.select("sur_refl_b06").multiply(0.0001)
+
+        ndvi = nir.subtract(red).divide(nir.add(red)).rename("NDVI")
+        ndwi = nir.subtract(swir).divide(nir.add(swir)).rename("NDWI")
+        nddi = ndvi.subtract(ndwi).divide(ndvi.add(ndwi)).rename("NDDI")
+
+        stats = ndvi.addBands(nddi).reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=roi,
+            scale=500,
+            maxPixels=int(1e9),
+            bestEffort=True,
+        )
+        return (
+            image.set("date", image.date().format("YYYY-MM-dd"))
+            .set("ndvi_mean", stats.get("NDVI"))
+            .set("nddi_mean", stats.get("NDDI"))
+        )
+
+    reduced = collection.map(compute_indices)
+    dates = reduced.aggregate_array("date").getInfo()
+    ndvi = reduced.aggregate_array("ndvi_mean").getInfo()
+    nddi = reduced.aggregate_array("nddi_mean").getInfo()
+
+    df = pd.DataFrame(
+        {"date": pd.to_datetime(dates), "ndvi": ndvi, "nddi": nddi}
+    )
+    df = df.set_index("date").sort_index()
+    df["station"] = station_name
+    return df
+
+
+# ---------------------------------------------------------------------------
+# ERA5 via CDS API (real data)
+# ---------------------------------------------------------------------------
+
+ERA5_VARIABLE_MAP = {
+    "10m_u_component_of_wind": "u10",
+    "10m_v_component_of_wind": "v10",
+    "2m_temperature": "t2m",
+    "2m_dewpoint_temperature": "d2m",
+    "surface_pressure": "sp",
+    "total_column_water_vapour": "tcwv",
+    "boundary_layer_height": "blh",
+    "soil_temperature_level_1": "stl1",
+    "volumetric_soil_water_layer_1": "swvl1",
+    "friction_velocity": "zust",
+    "total_precipitation": "tp",
+}
+
+
+def download_era5(
+    lat: float,
+    lon: float,
+    years: list[int],
+    output_nc: str | Path,
+    variables: list[str] | None = None,
+) -> None:
+    """Download ERA5 hourly reanalysis for a +/-2 degree bounding box."""
+    import cdsapi
+
+    variables = variables or list(ERA5_VARIABLE_MAP.keys())
+    c = cdsapi.Client()
+    c.retrieve(
+        "reanalysis-era5-single-levels",
+        {
+            "product_type": "reanalysis",
+            "variable": variables,
+            "year": [str(y) for y in years],
+            "month": [f"{m:02d}" for m in range(1, 13)],
+            "day": [f"{d:02d}" for d in range(1, 32)],
+            "time": [f"{h:02d}:00" for h in range(0, 24)],
+            "area": [lat + 2, lon - 2, lat - 2, lon + 2],
+            "format": "netcdf",
+        },
+        str(output_nc),
+    )
+
+
+def era5_to_daily_features(
+    nc_path: str | Path,
+    lat: float,
+    lon: float,
+) -> pd.DataFrame:
+    """
+    Load ERA5 NetCDF, extract nearest grid point, compute daily aggregates
+    for the 24-hour window ending at each calendar day.
+    """
+    import xarray as xr
+
+    ds = xr.open_dataset(nc_path)
+    ds_pt = ds.sel(latitude=lat, longitude=lon, method="nearest")
+
+    df = ds_pt.to_dataframe().reset_index()
+    time_col = "time" if "time" in df.columns else "valid_time"
+    df = df.rename(columns={time_col: "datetime"})
+    df = df.set_index("datetime").sort_index()
+
+    # Normalise column names
+    rename = {k: v for k, v in ERA5_VARIABLE_MAP.items() if k in df.columns}
+    inv = {v: k for k, v in ERA5_VARIABLE_MAP.items()}
+    for col in df.columns:
+        if col in inv:
+            df = df.rename(columns={col: inv[col]})
+
+    u_col = "u10" if "u10" in df.columns else "10m_u_component_of_wind"
+    v_col = "v10" if "v10" in df.columns else "10m_v_component_of_wind"
+    df["wind_speed_10m"] = np.sqrt(df[u_col] ** 2 + df[v_col] ** 2)
+
+    t2m = "t2m" if "t2m" in df.columns else "2m_temperature"
+    d2m = "d2m" if "d2m" in df.columns else "2m_dewpoint_temperature"
+    T = df[t2m] - 273.15
+    Td = df[d2m] - 273.15
+    df["rh2m"] = (
+        100
+        * np.exp((17.625 * Td) / (243.04 + Td))
+        / np.exp((17.625 * T) / (243.04 + T))
+    )
+
+    blh = "blh" if "blh" in df.columns else "boundary_layer_height"
+    sp = "sp" if "sp" in df.columns else "surface_pressure"
+    tcwv = "tcwv" if "tcwv" in df.columns else "total_column_water_vapour"
+    swvl1 = "swvl1" if "swvl1" in df.columns else "volumetric_soil_water_layer_1"
+    stl1 = "stl1" if "stl1" in df.columns else "soil_temperature_level_1"
+    zust = "zust" if "zust" in df.columns else "friction_velocity"
+    tp = "tp" if "tp" in df.columns else "total_precipitation"
+
+    agg = df.resample("D").agg(
+        ws_max=("wind_speed_10m", "max"),
+        ws_mean=("wind_speed_10m", "mean"),
+        blh_min=(blh, "min"),
+        blh_mean=(blh, "mean"),
+        rh_mean=("rh2m", "mean"),
+        t2m_mean=(t2m, "mean"),
+        sp_mean=(sp, "mean"),
+        tcwv_mean=(tcwv, "mean"),
+        sm_mean=(swvl1, "mean"),
+        soilt_mean=(stl1, "mean"),
+        ustar_max=(zust, "max"),
+        precip_sum=(tp, "sum"),
+    )
+    agg["precip_7d"] = (
+        agg["precip_sum"].rolling(7, min_periods=1).sum().shift(1)
+    )
+    return agg
+
+
+# ---------------------------------------------------------------------------
+# SoilGrids REST API (real data)
+# ---------------------------------------------------------------------------
+
+SOILGRIDS_URL = "https://rest.isric.org/soilgrids/v2.0/properties/query"
+
+
+def fetch_soilgrids(
+    lat: float,
+    lon: float,
+    properties: list[str] | None = None,
+    depths: list[str] | None = None,
+) -> dict[str, float]:
+    """Fetch SoilGrids v2 properties at a point."""
+    properties = properties or ["clay", "sand", "silt", "ocs", "bdod"]
+    depths = depths or ["0-5cm"]
+    params = {
+        "lon": lon,
+        "lat": lat,
+        "property": properties,
+        "depth": depths,
+        "value": "mean",
+    }
+    r = requests.get(SOILGRIDS_URL, params=params, timeout=60)
+    r.raise_for_status()
+    data = r.json()
+
+    features: dict[str, float] = {}
+    for layer in data["properties"]["layers"]:
+        prop = layer["name"]
+        for depth_info in layer["depths"]:
+            depth_label = depth_info["label"]
+            val = depth_info["values"]["mean"]
+            features[f"soil_{prop}_{depth_label}"] = val
+    return features
+
+
+def build_soil_dataframe(
+    stations: dict,
+    properties: list[str] | None = None,
+    sleep_s: float = 2.0,
+) -> pd.DataFrame:
+    """Build static soil DataFrame for all stations (respects rate limits)."""
+    rows = []
+    for name, coords in stations.items():
+        feats = fetch_soilgrids(coords["lat"], coords["lon"], properties)
+        feats["station"] = name
+        rows.append(feats)
+        time.sleep(sleep_s)
+    return pd.DataFrame(rows).set_index("station")
+
+
+# ---------------------------------------------------------------------------
+# Synthetic data generation (no API keys required)
+# ---------------------------------------------------------------------------
+
+def generate_synthetic_station_data(
+    station_name: str,
+    lat: float,
+    lon: float,
+    start: str = "2015-01-01",
+    end: str = "2020-12-31",
+    seed: int = 42,
+    positive_rate: float = 0.10,
+) -> dict[str, Any]:
+    """
+    Generate synthetic per-station CSVs mimicking real data structure.
+
+    Albedo anomaly is correlated with dust events so the full model can
+    demonstrate improvement over the baseline in synthetic mode.
+    """
+    rng = np.random.default_rng(
+        seed + hash(station_name) % 10000
+    )
+
+    dates = pd.date_range(start, end, freq="D")
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    n = len(dates)
+    doy = getattr(dates, "dayofyear", dates.day_of_year)
+
+    # Seasonal albedo climatology (desert: higher in dry summer)
+    seasonal = 0.28 + 0.04 * np.sin(2 * np.pi * (doy - 90) / 365.25)
+    noise = rng.normal(0, 0.008, n)
+    albedo_wsb = seasonal + noise
+    albedo_wsb = np.clip(albedo_wsb, 0.15, 0.45)
+
+    albedo_df = pd.DataFrame(
+        {"albedo_wsb": albedo_wsb},
+        index=dates,
+    )
+    albedo_df.index.name = "date"
+    albedo_df["station"] = station_name
+
+    # ERA5-like daily features
+    ws_base = 4 + 3 * np.sin(2 * np.pi * doy / 365.25)
+    era5 = pd.DataFrame(index=dates)
+    era5["ws_max"] = np.clip(ws_base + rng.normal(0, 2, n), 0.5, 25)
+    era5["ws_mean"] = era5["ws_max"] * rng.uniform(0.5, 0.8, n)
+    era5["blh_min"] = rng.uniform(200, 2000, n)
+    era5["blh_mean"] = era5["blh_min"] * rng.uniform(1.2, 2.0, n)
+    era5["rh_mean"] = np.clip(15 + rng.normal(0, 10, n), 2, 80)
+    era5["t2m_mean"] = 273.15 + 25 + 15 * np.sin(2 * np.pi * (doy - 180) / 365.25)
+    era5["sp_mean"] = rng.normal(100500, 500, n)
+    era5["tcwv_mean"] = rng.uniform(5, 25, n)
+    era5["sm_mean"] = rng.uniform(0.02, 0.15, n)
+    era5["soilt_mean"] = era5["t2m_mean"] - rng.uniform(2, 8, n)
+    era5["ustar_max"] = era5["ws_max"] * 0.08
+    era5["precip_sum"] = rng.exponential(0.001, n)
+    era5["precip_7d"] = (
+        pd.Series(era5["precip_sum"].values, index=dates)
+        .rolling(7, min_periods=1)
+        .sum()
+        .shift(1)
+        .fillna(0)
+        .values
+    )
+    era5.index.name = "date"
+
+    # MOD09A1 8-day composites
+    mod09_dates = pd.date_range(start, end, freq="8D")
+    ndvi_vals = 0.08 + 0.04 * rng.random(len(mod09_dates))
+    nddi_vals = rng.normal(-0.05, 0.15, len(mod09_dates))
+    mod09_df = pd.DataFrame(
+        {"ndvi": ndvi_vals, "nddi": nddi_vals},
+        index=mod09_dates,
+    )
+    mod09_df.index.name = "date"
+    mod09_df["station"] = station_name
+
+    # Visibility: low visibility on dusty days
+    vis_hourly_idx = pd.date_range(start_ts, end_ts + pd.Timedelta(hours=23), freq="h")
+    visibility = rng.uniform(3000, 10000, len(vis_hourly_idx))
+    vis_df = pd.DataFrame({"visibility_m": visibility}, index=vis_hourly_idx)
+
+    # Dust event probability driven by wind + low RH + albedo anomaly signal
+    dust_prob = (
+        0.02
+        + 0.15 * (era5["ws_max"].values > 10)
+        + 0.10 * (era5["rh_mean"].values < 20)
+    )
+    dust_prob = np.clip(dust_prob, 0, 0.5)
+
+    # Inject albedo anomaly before dust (study period only)
+    study_mask = dates.year >= 2018
+    anomaly = np.zeros(n)
+    dust_events = rng.random(n) < dust_prob
+    # Pre-dust albedo rise (key signal for full model)
+    for i in range(1, n):
+        if dust_events[i] and study_mask[i]:
+            anomaly[i - 1] = rng.uniform(0.02, 0.06)
+            nddi_idx = mod09_dates.searchsorted(dates[i])
+            if nddi_idx < len(mod09_df):
+                mod09_df.iloc[nddi_idx, mod09_df.columns.get_loc("nddi")] = (
+                    rng.uniform(0.05, 0.3)
+                )
+            vis_day_start = dates[i]
+            vis_day_end = dates[i] + pd.Timedelta(hours=23)
+            mask = (vis_df.index >= vis_day_start) & (vis_df.index <= vis_day_end)
+            vis_df.loc[mask, "visibility_m"] = rng.uniform(200, 900, mask.sum())
+
+    albedo_df.loc[study_mask, "albedo_wsb"] += anomaly[study_mask]
+    albedo_df.loc[study_mask, "albedo_wsb"] = albedo_df.loc[
+        study_mask, "albedo_wsb"
+    ].clip(0.15, 0.50)
+
+    # Static soil (typical Saudi desert values)
+    sand_frac = rng.uniform(750, 900)
+    soil_feats = {
+        "soil_clay_0-5cm": rng.uniform(30, 80),
+        "soil_sand_0-5cm": sand_frac,
+        "soil_silt_0-5cm": 1000 - sand_frac - rng.uniform(30, 80),
+        "soil_ocs_0-5cm": rng.uniform(2, 8),
+        "soil_bdod_0-5cm": rng.uniform(130, 160),
+    }
+
+    vis_flag = daily_visibility_flag(vis_df, threshold_m=1000.0)
+
+    return {
+        "albedo": albedo_df,
+        "era5": era5,
+        "mod09": mod09_df,
+        "vis_flag": vis_flag,
+        "soil_feats": soil_feats,
+    }
+
+
+def generate_all_synthetic_data(
+    config: dict,
+    output_dir: str | Path,
+) -> None:
+    """Write synthetic CSVs for all stations to output_dir."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    stations = config["stations"]
+    syn = config.get("synthetic", {})
+    seed = syn.get("seed", 42)
+    positive_rate = syn.get("positive_rate", 0.10)
+    start = f"{min(config['baseline_years'])}-01-01"
+    end = f"{max(config['study_years'])}-12-31"
+
+    soil_rows = []
+    for name, coords in stations.items():
+        data = generate_synthetic_station_data(
+            name,
+            coords["lat"],
+            coords["lon"],
+            start=start,
+            end=end,
+            seed=seed,
+            positive_rate=positive_rate,
+        )
+        data["albedo"].to_csv(output_dir / f"albedo_{name}.csv")
+        data["era5"].to_csv(output_dir / f"era5_{name}_daily.csv")
+        data["mod09"].to_csv(output_dir / f"mod09a1_{name}.csv")
+        data["vis_flag"].to_csv(output_dir / f"vis_flag_{name}.csv")
+        soil_row = {**data["soil_feats"], "station": name}
+        soil_rows.append(soil_row)
+        print(f"  Generated synthetic data for {name}")
+
+    pd.DataFrame(soil_rows).set_index("station").to_csv(
+        output_dir / "soil_properties.csv"
+    )
+
+
+def load_synthetic_station_bundle(
+    station_name: str,
+    data_dir: str | Path,
+) -> dict[str, Any]:
+    """Load pre-generated synthetic CSVs for one station."""
+    data_dir = Path(data_dir)
+    albedo = pd.read_csv(
+        data_dir / f"albedo_{station_name}.csv", index_col="date", parse_dates=True
+    )
+    era5 = pd.read_csv(
+        data_dir / f"era5_{station_name}_daily.csv", index_col="date", parse_dates=True
+    )
+    mod09 = pd.read_csv(
+        data_dir / f"mod09a1_{station_name}.csv", index_col="date", parse_dates=True
+    )
+    vis_flag = pd.read_csv(
+        data_dir / f"vis_flag_{station_name}.csv",
+        index_col=0,
+        parse_dates=True,
+    ).squeeze()
+    if isinstance(vis_flag, pd.DataFrame):
+        vis_flag = vis_flag.iloc[:, 0]
+    vis_flag.name = "vis_dust_flag"
+
+    soil_df = pd.read_csv(data_dir / "soil_properties.csv", index_col="station")
+    soil_feats = soil_df.loc[station_name].to_dict()
+
+    return {
+        "albedo": albedo,
+        "era5": era5,
+        "mod09": mod09,
+        "vis_flag": vis_flag,
+        "soil_feats": soil_feats,
+    }
