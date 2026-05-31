@@ -131,7 +131,7 @@ def build_dataset_from_real(config: dict) -> "pd.DataFrame":
                 import pandas as pd
 
                 vis_parts.append(
-                    pd.read_csv(vis_path, index_col="datetime", parse_dates=True)
+                    pd.read_csv(vis_path, index_col=0, parse_dates=True)
                 )
             else:
                 print(f"  Downloading ISD visibility {year}...")

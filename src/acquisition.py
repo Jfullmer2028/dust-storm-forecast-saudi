@@ -40,23 +40,36 @@ def download_isd_visibility(
     year: int,
 ) -> pd.DataFrame:
     """
-    Parse visibility (VIS) from full ISD data files via the `isd` library.
+    Parse visibility from full NOAA ISD files via the `isd` package.
 
-    Returns hourly visibility in metres; negative values are masked as NaN.
+    Downloads the gzipped ISD archive, parses hourly records, and returns
+    visibility in metres. Missing/sentinel values are stored as NaN.
     """
-    import isd
+    import gzip
+
+    from isd import Batch
 
     url = (
         f"https://www.ncei.noaa.gov/pub/data/noaa/{year}/"
         f"{wmo_id}-{wban}-{year}.gz"
     )
-    records = isd.read(url)
-    df = pd.DataFrame(records)[["time", "visibility_distance"]]
-    df.columns = ["datetime", "visibility_m"]
+    resp = requests.get(url, timeout=120)
+    resp.raise_for_status()
+
+    text = gzip.decompress(resp.content).decode("utf-8", errors="replace")
+    batch = Batch.parse(text)
+    records = batch.to_dict()
+
+    if not records:
+        raise ValueError(f"No ISD records parsed for {wmo_id} ({year})")
+
+    df = pd.DataFrame(records)[["datetime", "visibility"]]
+    df = df.rename(columns={"visibility": "visibility_m"})
     df["datetime"] = pd.to_datetime(df["datetime"])
     df = df.set_index("datetime").sort_index()
     df["visibility_m"] = pd.to_numeric(df["visibility_m"], errors="coerce")
     df.loc[df["visibility_m"] < 0, "visibility_m"] = float("nan")
+    df.index.name = "datetime"
     return df
 
 
