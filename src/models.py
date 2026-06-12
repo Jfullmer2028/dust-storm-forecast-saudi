@@ -75,7 +75,11 @@ def run_cross_validation(
       'time'    — TimeSeriesSplit (expanding window)
       'station' — GroupKFold leave-one-station-out
     """
-    df_sorted = df.sort_values(["station", "date"]).reset_index(drop=True)
+    # For temporal CV the data must be ordered by date across all stations,
+    # otherwise training folds contain dates later than the test fold of
+    # another station (temporal leakage).
+    sort_cols = ["date", "station"] if cv_strategy == "time" else ["station", "date"]
+    df_sorted = df.sort_values(sort_cols).reset_index(drop=True)
 
     missing = [c for c in feature_cols if c not in df_sorted.columns]
     if missing:
@@ -166,7 +170,7 @@ def tune_xgboost(
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    df_sorted = df.sort_values(["station", "date"]).reset_index(drop=True)
+    df_sorted = df.sort_values(["date", "station"]).reset_index(drop=True)
     X = df_sorted[feature_cols].values.astype(float)
     y = df_sorted[TARGET].values.astype(int)
     tscv = TimeSeriesSplit(n_splits=4)

@@ -1,0 +1,6 @@
+# Extra dependencies for real-data acquisition (--mode real)
+# Requires Google Earth Engine and Copernicus CDS accounts — see README.
+earthengine-api>=0.1.370
+cdsapi>=0.7.0
+isd>=0.3.0
+netCDF4>=1.6.0

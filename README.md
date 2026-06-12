@@ -11,7 +11,7 @@ Predict dust-storm onset **24 hours in advance** at three Saudi Arabian weather 
 ## Quick Start (Synthetic Data — No API Keys)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/dust-storm-forecast-saudi.git
+git clone https://github.com/jfullmer2028/dust-storm-forecast-saudi.git
 cd dust-storm-forecast-saudi
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
@@ -34,7 +34,9 @@ Expected runtime: ~2–5 minutes on a laptop (depends on SHAP).
 dust-storm-forecast-saudi/
 ├── config.yaml              # Stations, paths, model settings
 ├── run_pipeline.py          # Master script
-├── requirements.txt
+├── requirements.txt         # Core dependencies (synthetic mode)
+├── requirements-real.txt    # Extra deps for real-data acquisition
+├── .github/workflows/ci.yml # CI: unit tests + full pipeline smoke run
 ├── data/
 │   ├── synthetic/           # Pre-built test CSVs (no API keys needed)
 │   ├── raw/                 # Real downloads (ERA5 .nc, ISD, GEE exports)
@@ -46,10 +48,24 @@ dust-storm-forecast-saudi/
 │   ├── labeling.py          # NDDI + visibility dual-criterion labels
 │   ├── models.py            # XGBoost CV, Optuna tuning
 │   └── evaluation.py        # F₂ comparison, Wilcoxon, bootstrap, SHAP
+├── tests/                   # Pytest suite (features, labels, CV, smoke)
 ├── outputs/                 # Figures and feature importance CSV
 └── results/
     └── report.md            # Final results (generated)
 ```
+
+## Tests
+
+```bash
+pip install pytest
+pytest tests/ -v
+```
+
+The suite covers albedo-anomaly math (incl. DOY wrap-around at year end), the
+dual-criterion label, the next-day label shift, train-fold-only imputation,
+temporal-leakage-free CV splits, and an end-to-end smoke test on the bundled
+synthetic data. CI (GitHub Actions) runs the tests on Python 3.10–3.12 plus a
+full synthetic pipeline run, and uploads the report and figures as artifacts.
 
 ## Models
 
@@ -69,7 +85,7 @@ A **dust event on day D+1** is predicted from features on day D. A confirmed eve
 
 ### Evaluation
 - **Primary metric:** F₂-score (β=2, recall weighted 2× precision)
-- **CV:** `TimeSeriesSplit` (5 folds) — no temporal shuffling
+- **CV:** `TimeSeriesSplit` (5 folds) on data sorted by **date** across stations, so every training fold strictly precedes its test fold in time (no temporal leakage)
 - **Optional:** `--station-cv` for leave-one-station-out `GroupKFold`
 - **Statistics:** Wilcoxon signed-rank on per-fold F₂ differences; bootstrap CI (5 000 resamples) on concatenated predictions
 
@@ -83,11 +99,17 @@ python run_pipeline.py --mode real
 
 ### Prerequisites
 
+First install the extra acquisition dependencies:
+
+```bash
+pip install -r requirements-real.txt
+```
+
 | Source | Account / Tool | Setup |
 |--------|----------------|-------|
-| MODIS albedo & NDVI | [Google Earth Engine](https://earthengine.google.com) | `pip install earthengine-api` then `earthengine authenticate` |
+| MODIS albedo & NDVI | [Google Earth Engine](https://earthengine.google.com) | `earthengine authenticate` |
 | ERA5 reanalysis | [Copernicus CDS](https://cds.climate.copernicus.eu) | Create `~/.cdsapirc` with UID and API key |
-| Station visibility | NOAA ISD | `pip install isd` |
+| Station visibility | NOAA ISD | included in `requirements-real.txt` |
 | Soil properties | SoilGrids REST | Free, no key (`requests`) |
 
 ### ERA5 CDS config example (`~/.cdsapirc`)
@@ -124,7 +146,7 @@ Baseline years: 2015–2017. Study period: 2018–2020.
 `scale_pos_weight = n_negative / n_positive` computed **per training fold** only.
 
 ### Temporal leakage prevention
-Data sorted by `[station, date]` before splitting. Labels shifted with `shift(-1)` so features on day D predict day D+1.
+For `TimeSeriesSplit`, data is sorted by `[date, station]` before splitting so every training row precedes every test row in time. Labels are shifted with `shift(-1)` so features on day D predict day D+1, and fold-wise median imputation and `scale_pos_weight` are computed on the training fold only.
 
 ## Outputs
 
