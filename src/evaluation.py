@@ -30,24 +30,29 @@ def concat_cv_results(results: dict) -> tuple[np.ndarray, np.ndarray]:
 
 
 def per_station_f2(results: dict) -> pd.DataFrame:
-    """F2, precision and recall per station over all out-of-fold predictions."""
-    from sklearn.metrics import precision_score, recall_score
+    """PR-AUC, F2, precision and recall per station over out-of-fold predictions."""
+    from sklearn.metrics import average_precision_score, precision_score, recall_score
 
     if "fold_station" not in results:
         return pd.DataFrame()
 
     y_true = np.concatenate(results["fold_true"])
     y_pred = np.concatenate(results["fold_preds"])
+    proba = np.concatenate(results["fold_proba"])
     stations = np.concatenate(results["fold_station"])
 
     rows = []
     for st in sorted(np.unique(stations)):
         m = stations == st
+        has_both = 0 < y_true[m].sum() < m.sum()
         rows.append(
             {
                 "station": st,
                 "n": int(m.sum()),
                 "positives": int(y_true[m].sum()),
+                "ap": average_precision_score(y_true[m], proba[m])
+                if has_both
+                else float("nan"),
                 "f2": fbeta_score(y_true[m], y_pred[m], beta=2, zero_division=0),
                 "precision": precision_score(y_true[m], y_pred[m], zero_division=0),
                 "recall": recall_score(y_true[m], y_pred[m], zero_division=0),
@@ -235,6 +240,106 @@ def bootstrap_f2_ci(
     }
 
 
+def bootstrap_auc_ci(
+    y_true: np.ndarray,
+    proba_baseline: np.ndarray,
+    proba_full: np.ndarray,
+    metric: str = "ap",
+    n_bootstrap: int = 5000,
+    confidence_level: float = 0.95,
+    random_state: int = 42,
+) -> dict[str, Any]:
+    """
+    Threshold-free bootstrap CI for the change in a ranking metric.
+
+    metric='ap'  -> PR-AUC (average precision); 'roc' -> ROC-AUC.
+
+    Operates on the out-of-fold predicted probabilities, so it is unaffected by
+    the per-fold decision threshold — the cleaner comparison for a rare-event
+    forecaster. Paired resampling (same indices for both models) isolates the
+    albedo contribution.
+    """
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    score = average_precision_score if metric == "ap" else roc_auc_score
+    rng = np.random.default_rng(seed=random_state)
+    n = len(y_true)
+
+    base_point = float(score(y_true, proba_baseline))
+    full_point = float(score(y_true, proba_full))
+
+    deltas = np.empty(n_bootstrap)
+    filled = 0
+    attempts = 0
+    while filled < n_bootstrap and attempts < n_bootstrap * 20:
+        attempts += 1
+        idx = rng.integers(0, n, size=n)
+        yb = y_true[idx]
+        if yb.sum() == 0 or yb.sum() == len(yb):
+            continue  # metric undefined without both classes
+        deltas[filled] = score(yb, proba_full[idx]) - score(yb, proba_baseline[idx])
+        filled += 1
+    deltas = deltas[:filled]
+
+    alpha = 1 - confidence_level
+    lo = float(np.percentile(deltas, 100 * alpha / 2))
+    hi = float(np.percentile(deltas, 100 * (1 - alpha / 2)))
+    name = "PR-AUC" if metric == "ap" else "ROC-AUC"
+    print(
+        f"{name}: baseline={base_point:.4f}  full={full_point:.4f}  "
+        f"delta={full_point - base_point:+.4f}  "
+        f"{int(confidence_level * 100)}% CI [{lo:+.4f}, {hi:+.4f}]"
+    )
+    return {
+        "metric": name,
+        "baseline": base_point,
+        "full": full_point,
+        "delta": full_point - base_point,
+        "lo": lo,
+        "hi": hi,
+        "samples": deltas,
+    }
+
+
+def plot_pr_curves(
+    baseline_results: dict,
+    full_results: dict,
+    output_dir: str | Path = "outputs",
+) -> None:
+    """Precision-recall curves on concatenated out-of-fold predictions."""
+    from sklearn.metrics import average_precision_score, precision_recall_curve
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    y_true = np.concatenate(baseline_results["fold_true"])
+    pb = np.concatenate(baseline_results["fold_proba"])
+    pf = np.concatenate(full_results["fold_proba"])
+    base_rate = y_true.mean()
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    for proba, label, color in [
+        (pb, "Baseline", "#5B8DB8"),
+        (pf, "Full (+ albedo)", "#E07B39"),
+    ]:
+        prec, rec, _ = precision_recall_curve(y_true, proba)
+        ap = average_precision_score(y_true, proba)
+        ax.plot(rec, prec, color=color, lw=2, label=f"{label} (AP={ap:.3f})")
+    ax.axhline(
+        base_rate, color="grey", ls="--", lw=1,
+        label=f"No-skill ({base_rate:.3f})",
+    )
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title("Precision–Recall: Baseline vs. Full Model")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.legend(loc="upper right", fontsize=9)
+    plt.tight_layout()
+    plt.savefig(output_dir / "pr_curves.png", dpi=150)
+    plt.close()
+
+
 def full_statistical_analysis(
     baseline_results: dict,
     full_results: dict,
@@ -264,32 +369,57 @@ def full_statistical_analysis(
         output_dir=output_dir,
     )
 
-    print("\n" + "-" * 60)
-    print(f"{'Metric':<35} {'Baseline':>10} {'Full':>10} {'Delta':>10}")
-    print("-" * 60)
+    # Threshold-free ranking metrics on out-of-fold probabilities (primary).
+    proba_bas = np.concatenate(baseline_results["fold_proba"])
+    proba_ful = np.concatenate(full_results["fold_proba"])
+    ap_cmp = bootstrap_auc_ci(
+        y_true_bas, proba_bas, proba_ful, metric="ap",
+        n_bootstrap=n_bootstrap, confidence_level=confidence_level,
+        random_state=random_state,
+    )
+    roc_cmp = bootstrap_auc_ci(
+        y_true_bas, proba_bas, proba_ful, metric="roc",
+        n_bootstrap=n_bootstrap, confidence_level=confidence_level,
+        random_state=random_state,
+    )
+    ap_wtest = wilcoxon_test(
+        {"fold_f2": baseline_results["fold_ap"]},
+        {"fold_f2": full_results["fold_ap"]},
+    )
+    plot_pr_curves(baseline_results, full_results, output_dir=output_dir)
+
+    print("\n" + "-" * 64)
+    print(f"{'Metric':<28} {'Baseline':>10} {'Full':>10} {'Delta':>10} {'95% CI':>14}")
+    print("-" * 64)
     print(
-        f"{'Mean F2 (CV)':<35} "
-        f"{baseline_results['mean_f2']:>10.4f} "
+        f"{'PR-AUC (primary)':<28} {ap_cmp['baseline']:>10.4f} "
+        f"{ap_cmp['full']:>10.4f} {ap_cmp['delta']:>+10.4f} "
+        f"[{ap_cmp['lo']:+.3f},{ap_cmp['hi']:+.3f}]"
+    )
+    print(
+        f"{'ROC-AUC':<28} {roc_cmp['baseline']:>10.4f} "
+        f"{roc_cmp['full']:>10.4f} {roc_cmp['delta']:>+10.4f} "
+        f"[{roc_cmp['lo']:+.3f},{roc_cmp['hi']:+.3f}]"
+    )
+    print(
+        f"{'F2 @ tuned thr (oper.)':<28} {baseline_results['mean_f2']:>10.4f} "
         f"{full_results['mean_f2']:>10.4f} "
-        f"{full_results['mean_f2'] - baseline_results['mean_f2']:>+10.4f}"
+        f"{full_results['mean_f2'] - baseline_results['mean_f2']:>+10.4f} "
+        f"[{boot['lo']:+.3f},{boot['hi']:+.3f}]"
     )
-    print(
-        f"{'Wilcoxon p-value':<35} {'—':>10} {'—':>10} {wtest['p']:>10.4f}"
-    )
-    print(
-        f"{'Bootstrap CI lower':<35} {'—':>10} {'—':>10} {boot['lo']:>+10.4f}"
-    )
-    print(
-        f"{'Bootstrap CI upper':<35} {'—':>10} {'—':>10} {boot['hi']:>+10.4f}"
-    )
-    print("-" * 60)
+    print("-" * 64)
 
     return {
         "wilcoxon": wtest,
         "bootstrap": boot,
+        "ap": ap_cmp,
+        "roc": roc_cmp,
+        "ap_wilcoxon": ap_wtest,
         "baseline_mean_f2": baseline_results["mean_f2"],
         "full_mean_f2": full_results["mean_f2"],
         "delta_mean_f2": full_results["mean_f2"] - baseline_results["mean_f2"],
+        "baseline_mean_ap": baseline_results["mean_ap"],
+        "full_mean_ap": full_results["mean_ap"],
     }
 
 
@@ -367,12 +497,22 @@ def write_report(
 
     w = stats["wilcoxon"]
     b = stats["bootstrap"]
+    ap = stats["ap"]
+    roc = stats["roc"]
+    n_folds = len(full_results["fold_f2"])
+
+    def _sig(lo: float, hi: float) -> str:
+        if lo > 0:
+            return "CI entirely above 0 — full model significantly better"
+        if hi < 0:
+            return "CI entirely below 0 — baseline significantly better"
+        return "CI straddles 0 — no significant difference"
 
     lines = [
         "# Dust-Storm Onset Prediction — Results Report",
         "",
         f"**Data mode:** {data_mode}",
-        f"**Generated:** pipeline run",
+        "**Generated:** pipeline run",
         "",
         "## Dataset Summary",
         "",
@@ -381,44 +521,47 @@ def write_report(
         f"- Stations: {', '.join(sorted(df['station'].unique()))}",
         f"- Study period: {df['date'].min()} to {df['date'].max()}",
         "",
-        f"## Cross-Validation Results (TimeSeriesSplit, {len(full_results['fold_f2'])} folds)",
+        "## Headline Comparison",
         "",
-        "### Baseline Model (ERA5 + soil + NDVI, no albedo)",
+        "Primary metric is **PR-AUC (average precision)** — threshold-independent "
+        "and appropriate for this rare-event problem. ROC-AUC is reported "
+        "alongside it; F2 at the per-fold tuned threshold is the **operational** "
+        "metric. All deltas are full − baseline with paired bootstrap 95% CIs "
+        f"(out-of-fold predictions, {n_folds}-fold TimeSeriesSplit).",
         "",
-        "| Fold | F2-score |",
-        "|------|----------|",
+        "| Metric | Baseline | Full | Δ | 95% CI | Verdict |",
+        "|--------|----------|------|---|--------|---------|",
+        f"| **PR-AUC** (primary) | {ap['baseline']:.4f} | {ap['full']:.4f} | "
+        f"{ap['delta']:+.4f} | [{ap['lo']:+.4f}, {ap['hi']:+.4f}] | {_sig(ap['lo'], ap['hi'])} |",
+        f"| ROC-AUC | {roc['baseline']:.4f} | {roc['full']:.4f} | "
+        f"{roc['delta']:+.4f} | [{roc['lo']:+.4f}, {roc['hi']:+.4f}] | {_sig(roc['lo'], roc['hi'])} |",
+        f"| F2 @ tuned thr (operational) | {baseline_results['mean_f2']:.4f} | "
+        f"{full_results['mean_f2']:.4f} | {stats['delta_mean_f2']:+.4f} | "
+        f"[{b['lo']:+.4f}, {b['hi']:+.4f}] | {_sig(b['lo'], b['hi'])} |",
+        "",
+        f"## Per-Fold Cross-Validation (TimeSeriesSplit, {n_folds} folds)",
+        "",
+        "| Fold | Baseline PR-AUC | Full PR-AUC | Baseline F2 | Full F2 |",
+        "|------|-----------------|-------------|-------------|---------|",
     ]
-    for i, f2 in enumerate(baseline_results["fold_f2"], 1):
-        lines.append(f"| {i} | {f2:.4f} |")
+    for i in range(n_folds):
+        lines.append(
+            f"| {i + 1} | {baseline_results['fold_ap'][i]:.4f} | "
+            f"{full_results['fold_ap'][i]:.4f} | "
+            f"{baseline_results['fold_f2'][i]:.4f} | "
+            f"{full_results['fold_f2'][i]:.4f} |"
+        )
     lines.extend(
         [
-            f"| **Mean** | **{baseline_results['mean_f2']:.4f}** |",
-            f"| Std | {baseline_results['std_f2']:.4f} |",
-            "",
-            "### Full Model (+ MODIS shortwave albedo anomaly)",
-            "",
-            "| Fold | F2-score |",
-            "|------|----------|",
-        ]
-    )
-    for i, f2 in enumerate(full_results["fold_f2"], 1):
-        lines.append(f"| {i} | {f2:.4f} |")
-    lines.extend(
-        [
-            f"| **Mean** | **{full_results['mean_f2']:.4f}** |",
-            f"| Std | {full_results['std_f2']:.4f} |",
-            "",
-            "## Model Comparison",
-            "",
-            f"| Metric | Baseline | Full | Delta |",
-            f"|--------|----------|------|-------|",
-            f"| Mean F2 (CV) | {baseline_results['mean_f2']:.4f} | "
-            f"{full_results['mean_f2']:.4f} | {stats['delta_mean_f2']:+.4f} |",
+            f"| **Mean** | **{baseline_results['mean_ap']:.4f}** | "
+            f"**{full_results['mean_ap']:.4f}** | "
+            f"**{baseline_results['mean_f2']:.4f}** | "
+            f"**{full_results['mean_f2']:.4f}** |",
             "",
         ]
     )
 
-    # Per-station out-of-fold F2 (baseline vs full)
+    # Per-station out-of-fold PR-AUC and F2 (baseline vs full)
     base_ps = per_station_f2(baseline_results)
     full_ps = per_station_f2(full_results)
     if not full_ps.empty:
@@ -427,75 +570,72 @@ def write_report(
         )
         lines.extend(
             [
-                "## Per-Station Out-of-Fold F2",
+                "## Per-Station Out-of-Fold Performance",
                 "",
-                "| Station | n | Positives | Baseline F2 | Full F2 | Delta |",
-                "|---------|---|-----------|-------------|---------|-------|",
+                "| Station | n | Positives | Base PR-AUC | Full PR-AUC | ΔPR-AUC | "
+                "Base F2 | Full F2 |",
+                "|---------|---|-----------|-------------|-------------|---------|"
+                "---------|---------|",
             ]
         )
         for _, r in merged.iterrows():
             lines.append(
                 f"| {r['station']} | {int(r['n'])} | {int(r['positives'])} | "
-                f"{r['f2_base']:.4f} | {r['f2_full']:.4f} | "
-                f"{r['f2_full'] - r['f2_base']:+.4f} |"
+                f"{r['ap_base']:.4f} | {r['ap_full']:.4f} | "
+                f"{r['ap_full'] - r['ap_base']:+.4f} | "
+                f"{r['f2_base']:.4f} | {r['f2_full']:.4f} |"
             )
         lines.append("")
 
+    apw = stats["ap_wilcoxon"]
     lines.extend(
         [
             "## Statistical Tests",
             "",
-            "### Wilcoxon Signed-Rank Test (per-fold F2 differences)",
-            "",
-            f"- Per-fold differences: {np.round(w['differences'], 4).tolist()}",
-            f"- W statistic: {w['W']:.2f}",
-            f"- p-value: {w['p']:.4f}",
-            f"- Significant at alpha=0.05: {'Yes' if w['p'] < 0.05 else 'No'}",
-            "",
-            "### Bootstrap Confidence Interval (5000 resamples)",
-            "",
-            f"- Point estimate (median Delta F2): {b['point']:+.4f}",
-            f"- 95% CI: [{b['lo']:+.4f}, {b['hi']:+.4f}]",
-        ]
-    )
-    if b["lo"] > 0:
-        lines.append("- **Interpretation:** CI entirely above 0 — full model significantly better.")
-    elif b["hi"] < 0:
-        lines.append("- **Interpretation:** CI entirely below 0 — baseline significantly better.")
-    else:
-        lines.append("- **Interpretation:** CI straddles 0 — no significant difference detected.")
-
-    lines.extend(
-        [
+            "- **Paired bootstrap (5 000 resamples)** on out-of-fold predictions "
+            "gives the 95% CIs in the headline table — the primary inference.",
+            f"- **Wilcoxon signed-rank on per-fold PR-AUC** (n={n_folds}): "
+            f"W={apw['W']:.2f}, p={apw['p']:.4f} "
+            f"({'significant' if apw['p'] < 0.05 else 'not significant'} at α=0.05).",
+            f"- **Wilcoxon signed-rank on per-fold F2** (n={n_folds}): "
+            f"W={w['W']:.2f}, p={w['p']:.4f} "
+            f"({'significant' if w['p'] < 0.05 else 'not significant'} at α=0.05).",
             "",
             "## Figures",
             "",
-            "- `outputs/f2_comparison_by_fold.png` — per-fold F2 bar chart",
-            "- `outputs/bootstrap_delta_f2.png` — bootstrap Delta F2 distribution",
-            "- `outputs/shap_importance.png` — SHAP feature importance (full model)",
+            "- `pr_curves.png` — precision–recall curves (baseline vs full)",
+            "- `f2_comparison_by_fold.png` — per-fold F2 bar chart",
+            "- `bootstrap_delta_f2.png` — bootstrap ΔF2 distribution",
+            "- `shap_importance.png` — SHAP feature importance (full model)",
             "",
             "## Conclusion",
             "",
         ]
     )
 
-    if stats["delta_mean_f2"] > 0 and b["lo"] > 0:
+    if ap["lo"] > 0:
         lines.append(
-            "Adding the MODIS shortwave broadband albedo anomaly features "
-            "improves 24-hour dust-storm onset prediction F2-score relative to "
-            "the baseline meteorological model. Both the mean CV improvement and "
-            "the bootstrap 95% CI (entirely above zero) support this finding."
+            "On the primary threshold-independent metric (PR-AUC), adding the "
+            "MODIS shortwave broadband albedo anomaly **significantly improves** "
+            "24-hour dust-storm risk ranking: the paired bootstrap 95% CI for "
+            f"ΔPR-AUC is entirely above zero ({ap['delta']:+.4f} "
+            f"[{ap['lo']:+.4f}, {ap['hi']:+.4f}])."
         )
-    elif stats["delta_mean_f2"] > 0:
+    elif ap["delta"] > 0:
         lines.append(
-            "The full model shows a positive mean F2 improvement, but the bootstrap "
-            "confidence interval includes zero — treat the albedo signal as suggestive "
-            "but not conclusively significant with this sample."
+            "Adding the MODIS albedo anomaly yields a positive but not "
+            f"statistically conclusive PR-AUC gain ({ap['delta']:+.4f}, 95% CI "
+            f"[{ap['lo']:+.4f}, {ap['hi']:+.4f}] includes zero): suggestive "
+            "evidence that surface reflectivity adds incremental dust-forecast "
+            "skill, warranting a larger sample / wider MODIS footprint."
         )
     else:
         lines.append(
-            "The full model did not outperform the baseline in this run. "
-            "With real MODIS/ERA5 data and more dust events, re-evaluate."
+            "On real observations the MODIS albedo anomaly does not improve "
+            f"PR-AUC ({ap['delta']:+.4f}, 95% CI [{ap['lo']:+.4f}, {ap['hi']:+.4f}]). "
+            "Satellite albedo provides no significant incremental skill over the "
+            "meteorological baseline at these stations — an honest null result, "
+            "with station-level heterogeneity worth follow-up."
         )
 
     output_path.write_text("\n".join(lines) + "\n")

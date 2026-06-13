@@ -9,7 +9,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from sklearn.metrics import fbeta_score, precision_score, recall_score
+from sklearn.metrics import (
+    average_precision_score,
+    fbeta_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import GroupKFold, TimeSeriesSplit
 
 TARGET = "dust_event_next_day"
@@ -99,6 +105,8 @@ def run_cross_validation(
         raise ValueError(f"Unknown cv_strategy: {cv_strategy}")
 
     fold_f2: list[float] = []
+    fold_ap: list[float] = []
+    fold_roc: list[float] = []
     fold_preds: list[np.ndarray] = []
     fold_true: list[np.ndarray] = []
     fold_proba: list[np.ndarray] = []
@@ -136,7 +144,16 @@ def run_cross_validation(
         y_pred = (y_proba >= threshold).astype(int)
 
         f2 = fbeta_score(y_test, y_pred, beta=2, zero_division=0)
+        # Threshold-independent metrics (only defined when the fold has both
+        # classes). PR-AUC (average precision) is the primary metric for this
+        # rare-event problem; ROC-AUC is reported alongside it.
+        has_both = 0 < y_test.sum() < len(y_test)
+        ap = average_precision_score(y_test, y_proba) if has_both else float("nan")
+        roc = roc_auc_score(y_test, y_proba) if has_both else float("nan")
+
         fold_f2.append(f2)
+        fold_ap.append(ap)
+        fold_roc.append(roc)
         fold_preds.append(y_pred)
         fold_true.append(y_test)
         fold_proba.append(y_proba)
@@ -145,9 +162,10 @@ def run_cross_validation(
 
         if verbose:
             print(
-                f"  Fold {fold_idx + 1}: F2={f2:.4f}  "
-                f"Precision={precision_score(y_test, y_pred, zero_division=0):.3f}  "
-                f"Recall={recall_score(y_test, y_pred, zero_division=0):.3f}  "
+                f"  Fold {fold_idx + 1}: PR-AUC={ap:.4f}  ROC-AUC={roc:.4f}  "
+                f"F2={f2:.4f}  "
+                f"P={precision_score(y_test, y_pred, zero_division=0):.3f}  "
+                f"R={recall_score(y_test, y_pred, zero_division=0):.3f}  "
                 f"thr={threshold:.2f}  "
                 f"(+:{y_test.sum()}  -:{(y_test == 0).sum()})"
             )
@@ -156,6 +174,11 @@ def run_cross_validation(
         "fold_f2": np.array(fold_f2),
         "mean_f2": float(np.mean(fold_f2)),
         "std_f2": float(np.std(fold_f2)),
+        "fold_ap": np.array(fold_ap),
+        "mean_ap": float(np.nanmean(fold_ap)),
+        "std_ap": float(np.nanstd(fold_ap)),
+        "fold_roc": np.array(fold_roc),
+        "mean_roc": float(np.nanmean(fold_roc)),
         "fold_preds": fold_preds,
         "fold_true": fold_true,
         "fold_proba": fold_proba,

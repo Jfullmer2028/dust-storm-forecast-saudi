@@ -66,12 +66,20 @@ class TestRunCrossValidation:
         assert {
             "mean_f2",
             "std_f2",
+            "fold_ap",
+            "mean_ap",
+            "fold_roc",
+            "mean_roc",
             "fold_preds",
             "fold_true",
+            "fold_proba",
             "fold_station",
             "fold_threshold",
         } <= set(results)
         assert all(0.0 <= f <= 1.0 for f in results["fold_f2"])
+        # PR-AUC / ROC-AUC are valid probabilities-of-ranking in [0, 1].
+        assert all(np.isnan(a) or 0.0 <= a <= 1.0 for a in results["fold_ap"])
+        assert all(np.isnan(r) or 0.0 <= r <= 1.0 for r in results["fold_roc"])
         # Per-test-row station labels are tracked for the per-station report.
         assert len(np.concatenate(results["fold_station"])) == len(
             np.concatenate(results["fold_true"])

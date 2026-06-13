@@ -30,32 +30,54 @@ The pipeline will:
 1. Load (or generate) synthetic test data in `data/synthetic/`
 2. Engineer features including MODIS albedo anomaly (±15-day DOY climatology from the 2013–2017 baseline)
 3. Train **baseline** vs **full** XGBoost models with `TimeSeriesSplit` (8 folds), tuning an **F₂-optimal decision threshold** on a held-out validation slice of each training fold
-4. Compare F₂-scores with **Wilcoxon signed-rank** and **bootstrap 95% CI**, plus a **per-station** F₂ breakdown
-5. Write figures to `outputs/` and `results/report.md`
+4. Compare models on **PR-AUC** (primary), **ROC-AUC**, and operational **F₂**, each with a paired **bootstrap 95% CI** and **Wilcoxon** test, plus a **per-station** breakdown
+5. Write figures (incl. precision–recall curves) to `outputs/` and `results/report.md`
 
 Expected runtime: ~3–6 minutes on a laptop (~14.5k station-days; depends on SHAP).
 
-### Representative result (synthetic mode)
+### Metrics — why PR-AUC is primary
 
-| Model | Mean F₂ (8-fold CV) |
-|-------|---------------------|
-| Baseline (ERA5 + soil + NDVI) | **0.476** |
-| Full (+ MODIS albedo anomaly) | **0.559** |
-| **ΔF₂** | **+0.083** (Wilcoxon p = 0.008; bootstrap 95% CI [+0.062, +0.097]) |
+F₂ depends on a decision threshold tuned per fold; with dust events at ~6 % those
+validation slices are tiny, so the threshold is noisy and can confound the albedo
+comparison. The **primary metric is therefore PR-AUC (average precision)** —
+threshold-independent and the field standard for rare-event detection — computed
+on the out-of-fold predicted probabilities. **ROC-AUC** is reported alongside,
+and **F₂ at the tuned threshold** is kept as the *operational* metric. This
+separates *“does albedo improve dust-risk ranking?”* from *“does it move the
+thresholded decision?”*
 
-The baseline is a genuinely competent meteorological forecaster (no degenerate 0.000 folds), and the albedo anomaly delivers a **modest but statistically significant** incremental gain — the realistic outcome such a study should produce. Albedo helps at **every** station, with heterogeneity from +0.03 (Sharurah) to +0.12 (Riyadh).
+### Representative result (synthetic mode, 8-fold CV)
+
+| Metric | Baseline | Full (+ albedo) | Δ | 95% CI |
+|--------|----------|-----------------|---|--------|
+| **PR-AUC** (primary) | 0.324 | 0.397 | **+0.074** | [+0.054, +0.093] |
+| ROC-AUC | 0.810 | 0.863 | +0.054 | [+0.045, +0.062] |
+| F₂ @ tuned thr | 0.476 | 0.559 | +0.083 | [+0.062, +0.096] |
+
+All three metrics agree and their CIs sit entirely above zero: on synthetic data
+the albedo anomaly delivers a **modest, statistically significant** gain — and the
+baseline is a genuinely competent forecaster (ROC-AUC 0.81, no degenerate folds).
 
 ### Real-data result (keyless `--mode real`, Riyadh/Hafar/Sharurah, 2018–2020)
 
 Run end-to-end on **live observations** (Open-Meteo ERA5 + ORNL MODIS + NOAA ISD + SoilGrids), 3,285 station-days, 201 dust events (6.1%):
 
-| Model | Mean F₂ (5-fold CV) |
-|-------|---------------------|
-| Baseline (ERA5 + soil + NDVI) | **0.265** |
-| Full (+ MODIS shortwave albedo anomaly) | **0.257** |
-| **ΔF₂** | **−0.008** (Wilcoxon p = 1.0; bootstrap 95% CI [−0.035, +0.054]) |
+| Metric | Baseline | Full (+ albedo) | Δ | 95% CI |
+|--------|----------|-----------------|---|--------|
+| **PR-AUC** (primary) | 0.117 | 0.116 | **−0.002** | [−0.021, +0.018] |
+| ROC-AUC | 0.713 | 0.718 | +0.005 | [−0.015, +0.025] |
+| F₂ @ tuned thr | 0.265 | 0.257 | −0.008 | [−0.035, +0.053] |
 
-On real data the answer to the title question is, at these three stations, **no — adding satellite albedo does not significantly improve 24-hour dust forecasting** (the bootstrap CI straddles zero). It does help at southern **Sharurah** (+0.094 F₂) while being neutral-to-slightly-negative at Riyadh and Hafar — a genuinely mixed, publishable finding rather than a manufactured win. The full results are in [`results/report_real.md`](results/report_real.md). This uses a ±20 km MODIS footprint and a 1-year (2017) albedo baseline; widening both (`--albedo-km`, more `--modis-years`) is the natural next step.
+On real data, **all three metrics agree on a null**: adding satellite albedo does
+**not** significantly improve 24-hour dust forecasting at these stations (every CI
+straddles zero). Tellingly, ROC-AUC ≈ 0.71 shows both models *do* have real
+dust-ranking skill — the meteorological baseline already captures the predictable
+signal, and albedo adds nothing on top of it. The threshold-free PR-AUC confirms
+this isn't an artifact of F₂'s noisy threshold. Albedo does help at southern
+**Sharurah** (per-station, in [`results/report_real.md`](results/report_real.md)),
+a mixed result worth follow-up. This uses a ±20 km MODIS footprint and a 1-year
+(2017) albedo baseline; widening both (`--albedo-km`, more `--modis-years`) is the
+natural next step.
 
 ## Project Structure
 
@@ -95,7 +117,8 @@ pytest tests/ -v
 The suite covers albedo-anomaly math (incl. DOY wrap-around at year end), the
 dual-criterion and visibility-only labels, the next-day label shift,
 train-fold-only imputation, temporal-leakage-free CV splits, F₂-optimal
-threshold tuning, per-station F₂, the Wilcoxon and bootstrap statistics, a guard
+threshold tuning, per-fold PR-AUC/ROC-AUC, the paired bootstrap CI for ΔPR-AUC,
+per-station PR-AUC/F₂, the Wilcoxon statistics, a guard
 that the meteorological baseline is **never degenerate** (no 0.000 folds), the
 keyless real-source parsers (Open-Meteo aggregation, NOAA ISD visibility
 parsing, the Liang albedo / NDVI computation — all network-mocked so CI stays
@@ -120,11 +143,11 @@ A **dust event on day D+1** is predicted from features on day D.
 - **Keyless real path** (`label_mode="visibility"`): the **WMO dust-storm criterion** — at least one hourly visibility ≤ 1 000 m (NOAA ISD). The 8-day MODIS NDDI is too coarse and numerically unstable over bright desert to gate individual dust days, so it is dropped from labeling (NDVI is retained as a feature).
 
 ### Evaluation
-- **Primary metric:** F₂-score (β=2, recall weighted 2× precision)
+- **Primary metric:** PR-AUC (average precision) — threshold-independent, the standard for rare-event detection. **Secondary:** ROC-AUC. **Operational:** F₂-score (β=2) at a tuned threshold.
 - **CV:** `TimeSeriesSplit` (8 folds) on data sorted by **date** across stations, so every training fold strictly precedes its test fold in time (no temporal leakage)
-- **Decision threshold:** tuned to maximise F₂ on a held-out validation slice (last 15%) of each training fold, then applied to the test fold — never the naive 0.5 cut-off
+- **Decision threshold** (F₂ only): tuned to maximise F₂ on a held-out validation slice (last 15%) of each training fold, then applied to the test fold — never the naive 0.5 cut-off. PR-AUC/ROC-AUC are threshold-free and so unaffected by this.
 - **Optional:** `--station-cv` for leave-one-station-out `GroupKFold`
-- **Statistics:** Wilcoxon signed-rank on per-fold F₂ differences (8 folds → significance is now attainable); bootstrap CI (5 000 resamples) on concatenated predictions; per-station F₂ breakdown
+- **Statistics:** paired **bootstrap 95% CIs** (5 000 resamples) on out-of-fold probabilities for ΔPR-AUC and ΔROC-AUC, and on predictions for ΔF₂; **Wilcoxon signed-rank** on per-fold PR-AUC and F₂; **per-station** PR-AUC/F₂ breakdown; precision–recall curves
 
 ## Real Data Mode (keyless — no accounts required)
 

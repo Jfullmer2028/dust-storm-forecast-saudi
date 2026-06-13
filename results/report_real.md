@@ -10,67 +10,48 @@
 - Stations: hafar, riyadh, sharurah
 - Study period: 2018-01-01 00:00:00 to 2020-12-30 00:00:00
 
-## Cross-Validation Results (TimeSeriesSplit, 5 folds)
+## Headline Comparison
 
-### Baseline Model (ERA5 + soil + NDVI, no albedo)
+Primary metric is **PR-AUC (average precision)** — threshold-independent and appropriate for this rare-event problem. ROC-AUC is reported alongside it; F2 at the per-fold tuned threshold is the **operational** metric. All deltas are full − baseline with paired bootstrap 95% CIs (out-of-fold predictions, 5-fold TimeSeriesSplit).
 
-| Fold | F2-score |
-|------|----------|
-| 1 | 0.2852 |
-| 2 | 0.2690 |
-| 3 | 0.1695 |
-| 4 | 0.3770 |
-| 5 | 0.2247 |
-| **Mean** | **0.2651** |
-| Std | 0.0689 |
+| Metric | Baseline | Full | Δ | 95% CI | Verdict |
+|--------|----------|------|---|--------|---------|
+| **PR-AUC** (primary) | 0.1170 | 0.1155 | -0.0015 | [-0.0210, +0.0184] | CI straddles 0 — no significant difference |
+| ROC-AUC | 0.7133 | 0.7179 | +0.0045 | [-0.0150, +0.0248] | CI straddles 0 — no significant difference |
+| F2 @ tuned thr (operational) | 0.2651 | 0.2573 | -0.0078 | [-0.0349, +0.0535] | CI straddles 0 — no significant difference |
 
-### Full Model (+ MODIS shortwave albedo anomaly)
+## Per-Fold Cross-Validation (TimeSeriesSplit, 5 folds)
 
-| Fold | F2-score |
-|------|----------|
-| 1 | 0.2792 |
-| 2 | 0.2694 |
-| 3 | 0.0694 |
-| 4 | 0.3770 |
-| 5 | 0.2913 |
-| **Mean** | **0.2573** |
-| Std | 0.1014 |
+| Fold | Baseline PR-AUC | Full PR-AUC | Baseline F2 | Full F2 |
+|------|-----------------|-------------|-------------|---------|
+| 1 | 0.2367 | 0.2188 | 0.2852 | 0.2792 |
+| 2 | 0.0949 | 0.0908 | 0.2690 | 0.2694 |
+| 3 | 0.0599 | 0.0759 | 0.1695 | 0.0694 |
+| 4 | 0.1620 | 0.1558 | 0.3770 | 0.3770 |
+| 5 | 0.0949 | 0.0885 | 0.2247 | 0.2913 |
+| **Mean** | **0.1297** | **0.1260** | **0.2651** | **0.2573** |
 
-## Model Comparison
+## Per-Station Out-of-Fold Performance
 
-| Metric | Baseline | Full | Delta |
-|--------|----------|------|-------|
-| Mean F2 (CV) | 0.2651 | 0.2573 | -0.0078 |
-
-## Per-Station Out-of-Fold F2
-
-| Station | n | Positives | Baseline F2 | Full F2 | Delta |
-|---------|---|-----------|-------------|---------|-------|
-| hafar | 911 | 50 | 0.3187 | 0.3150 | -0.0037 |
-| riyadh | 912 | 42 | 0.3053 | 0.2933 | -0.0120 |
-| sharurah | 912 | 34 | 0.1579 | 0.2523 | +0.0944 |
+| Station | n | Positives | Base PR-AUC | Full PR-AUC | ΔPR-AUC | Base F2 | Full F2 |
+|---------|---|-----------|-------------|-------------|---------|---------|---------|
+| hafar | 911 | 50 | 0.1542 | 0.1534 | -0.0008 | 0.3187 | 0.3150 |
+| riyadh | 912 | 42 | 0.1205 | 0.1155 | -0.0050 | 0.3053 | 0.2933 |
+| sharurah | 912 | 34 | 0.0889 | 0.0948 | +0.0060 | 0.1579 | 0.2523 |
 
 ## Statistical Tests
 
-### Wilcoxon Signed-Rank Test (per-fold F2 differences)
-
-- Per-fold differences: [-0.006, 0.0004, -0.1, 0.0001, 0.0665]
-- W statistic: 7.00
-- p-value: 1.0000
-- Significant at alpha=0.05: No
-
-### Bootstrap Confidence Interval (5000 resamples)
-
-- Point estimate (median Delta F2): +0.0090
-- 95% CI: [-0.0349, +0.0535]
-- **Interpretation:** CI straddles 0 — no significant difference detected.
+- **Paired bootstrap (5 000 resamples)** on out-of-fold predictions gives the 95% CIs in the headline table — the primary inference.
+- **Wilcoxon signed-rank on per-fold PR-AUC** (n=5): W=4.00, p=0.4375 (not significant at α=0.05).
+- **Wilcoxon signed-rank on per-fold F2** (n=5): W=7.00, p=1.0000 (not significant at α=0.05).
 
 ## Figures
 
-- `outputs/f2_comparison_by_fold.png` — per-fold F2 bar chart
-- `outputs/bootstrap_delta_f2.png` — bootstrap Delta F2 distribution
-- `outputs/shap_importance.png` — SHAP feature importance (full model)
+- `pr_curves.png` — precision–recall curves (baseline vs full)
+- `f2_comparison_by_fold.png` — per-fold F2 bar chart
+- `bootstrap_delta_f2.png` — bootstrap ΔF2 distribution
+- `shap_importance.png` — SHAP feature importance (full model)
 
 ## Conclusion
 
-The full model did not outperform the baseline in this run. With real MODIS/ERA5 data and more dust events, re-evaluate.
+On real observations the MODIS albedo anomaly does not improve PR-AUC (-0.0015, 95% CI [-0.0210, +0.0184]). Satellite albedo provides no significant incremental skill over the meteorological baseline at these stations — an honest null result, with station-level heterogeneity worth follow-up.
