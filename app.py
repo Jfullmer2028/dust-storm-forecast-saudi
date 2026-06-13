@@ -102,9 +102,9 @@ def get_ablation(_df, feats):
 
 config, df, feats, medians, model = load_everything()
 
-st.title("🌪️ Can Satellite Albedo Improve Dust-Storm Forecasting?")
+st.title("🌪️ Forecasting Dust-Storm Onset in Saudi Arabia")
 st.caption(
-    "Saudi Arabia · 24-hour-ahead dust onset · XGBoost · "
+    "24-hour-ahead dust onset · XGBoost · identifying the drivers that carry skill · "
     "interactive companion to the project (synthetic-data model for live use)"
 )
 
@@ -118,17 +118,17 @@ tab1, tab2, tab3, tab4 = st.tabs(
 with tab1:
     st.subheader("What the study found")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Albedo (real data)", "no effect", "ΔPR-AUC +0.004 (ns)")
-    c2.metric("Vegetation / NDVI (real)", "significant", "ΔPR-AUC +0.018 ✓")
-    c3.metric("Baseline skill", "ROC-AUC 0.71", "real, 3 stations")
+    c1.metric("Top driver (real data)", "vegetation / NDVI", "ΔPR-AUC +0.018 ✓")
+    c2.metric("Forecast skill", "ROC-AUC 0.73", "PR-AUC 0.14 @ 6% base rate")
+    c3.metric("Stations", "3", "3,285 station-days")
     st.markdown(
         """
 A systematic *driver ablation* ranks each satellite and reanalysis driver group
 by its incremental forecasting skill. On real data, **MODIS vegetation cover
-(NDVI) significantly improves 24-hour dust forecasting, while satellite albedo
-does not.** Where the satellite sees less green cover (more exposed, erodible
-surface), next-day dust is more predictable — a signal the meteorological
-baseline does not already capture.
+(NDVI) is the one satellite driver with statistically significant incremental
+skill.** Where the satellite sees less green cover (more exposed, erodible
+surface), next-day dust is more predictable — information not already present in
+the rest of the feature set.
 
 This live demo trains on the project's **synthetic** generator (self-contained,
 no keys) so you can interact with the model. The real-data numbers above come
@@ -193,11 +193,7 @@ with tab3:
         overrides["sm_mean"] = slider_for("sm_mean", "Soil moisture")
     with colB:
         overrides["ndvi"] = slider_for("ndvi", "NDVI (vegetation cover)")
-        use_albedo = st.checkbox("Include albedo anomaly signal", value=True)
-        if use_albedo:
-            overrides["albedo_anomaly"] = slider_for(
-                "albedo_anomaly", "Albedo anomaly"
-            )
+        overrides["tcwv_mean"] = slider_for("tcwv_mean", "Column water vapour")
         overrides["precip_7d"] = slider_for("precip_7d", "7-day antecedent precip")
 
     x = medians.copy()

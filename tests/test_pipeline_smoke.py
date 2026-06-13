@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from src.acquisition import load_config, load_synthetic_station_bundle
-from src.evaluation import full_statistical_analysis
+from src.evaluation import run_group_ablation
 from src.features import BASELINE_FEATURES, FULL_FEATURES, compute_albedo_anomaly
 from src.labeling import build_full_dataset, build_master_dataframe
 from src.models import run_cross_validation
@@ -67,23 +67,35 @@ def test_baseline_has_real_skill(master_df):
     assert (baseline["fold_f2"] > 0.0).all()
 
 
-def test_cv_runs_and_albedo_improves_f2(master_df, tmp_path):
-    fast = {"n_estimators": 120}
-    baseline = run_cross_validation(
-        master_df, BASELINE_FEATURES, n_splits=6, xgb_params=fast, verbose=False
+def test_forecast_model_has_skill(master_df):
+    """The forecast model ranks dust risk well above the base rate."""
+    res = run_cross_validation(
+        master_df, FULL_FEATURES, n_splits=6,
+        xgb_params={"n_estimators": 120}, verbose=False,
     )
-    full = run_cross_validation(
-        master_df, FULL_FEATURES, n_splits=6, xgb_params=fast, verbose=False
-    )
-    # Albedo carries an incremental precursor signal: a modest, consistent gain.
-    assert full["mean_f2"] > baseline["mean_f2"]
-    assert 0.0 < (full["mean_f2"] - baseline["mean_f2"]) < 0.5
-
+    base_rate = master_df["dust_event_next_day"].mean()
+    assert res["mean_ap"] > 2 * base_rate          # real ranking skill
+    assert res["mean_roc"] > 0.7
     # Decision thresholds are tuned per fold, not a fixed default.
-    assert all(0.0 < t < 1.0 for t in full["fold_threshold"])
+    assert all(0.0 < t < 1.0 for t in res["fold_threshold"])
 
-    stats = full_statistical_analysis(
-        baseline, full, n_bootstrap=300, output_dir=tmp_path
+
+def test_ablation_recovers_known_drivers(master_df, tmp_path):
+    """The ablation surfaces the satellite/surface drivers built into the data."""
+    # Compact feature subset → groups: wind_speed, humidity_dryness, vegetation,
+    # wind_direction, albedo, soil_texture.
+    feats = [
+        "ws_max", "rh_mean", "ndvi", "wind_n_mean",
+        "albedo_anomaly", "soil_clay_0-5cm",
+    ]
+    table = run_group_ablation(
+        master_df, feats, n_splits=4, xgb_params={"n_estimators": 80},
+        n_bootstrap=300, output_dir=tmp_path,
     )
-    assert np.isfinite(stats["wilcoxon"]["p"])
-    assert stats["bootstrap"]["lo"] <= stats["bootstrap"]["hi"]
+    ranked = table.sort_values("incremental_pr_auc", ascending=False)
+    # A known driver (vegetation or wind direction) tops the ranking, above the
+    # pure-noise soil-texture group.
+    assert ranked.iloc[0]["group"] in {"vegetation", "wind_direction"}
+    soil = table.set_index("group").loc["soil_texture", "incremental_pr_auc"]
+    veg = table.set_index("group").loc["vegetation", "incremental_pr_auc"]
+    assert veg > soil

@@ -11,22 +11,13 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mtick
 import numpy as np
 import pandas as pd
 import xgboost as xgb
 from scipy.stats import wilcoxon
 from sklearn.metrics import fbeta_score
 
-from src.features import BASELINE_FEATURES, FULL_FEATURES
-from src.models import TARGET, run_cross_validation
-
-
-def concat_cv_results(results: dict) -> tuple[np.ndarray, np.ndarray]:
-    """Concatenate true labels and predictions across all CV folds."""
-    y_true = np.concatenate(results["fold_true"])
-    y_pred = np.concatenate(results["fold_preds"])
-    return y_true, y_pred
+from src.models import TARGET
 
 
 def per_station_f2(results: dict) -> pd.DataFrame:
@@ -59,93 +50,6 @@ def per_station_f2(results: dict) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
-
-
-def evaluate_both_models(
-    df: pd.DataFrame,
-    n_splits: int = 5,
-    output_dir: str | Path = "outputs",
-    xgb_params: dict | None = None,
-    random_state: int = 42,
-    baseline_features: list[str] | None = None,
-    full_features: list[str] | None = None,
-) -> tuple[dict, dict]:
-    """Run CV for baseline and full models; save per-fold comparison chart."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    baseline_features = baseline_features or BASELINE_FEATURES
-    full_features = full_features or FULL_FEATURES
-
-    print("=" * 55)
-    print("BASELINE MODEL (no albedo anomaly)")
-    print("=" * 55)
-    baseline_results = run_cross_validation(
-        df,
-        baseline_features,
-        n_splits=n_splits,
-        cv_strategy="time",
-        random_state=random_state,
-        xgb_params=xgb_params,
-    )
-
-    print()
-    print("=" * 55)
-    print("FULL MODEL (with albedo anomaly)")
-    print("=" * 55)
-    full_results = run_cross_validation(
-        df,
-        full_features,
-        n_splits=n_splits,
-        cv_strategy="time",
-        random_state=random_state,
-        xgb_params=xgb_params,
-    )
-
-    print()
-    print("Summary")
-    print("-" * 40)
-    print(
-        f"Baseline mean F2 = {baseline_results['mean_f2']:.4f} "
-        f"+/- {baseline_results['std_f2']:.4f}"
-    )
-    print(
-        f"Full     mean F2 = {full_results['mean_f2']:.4f} "
-        f"+/- {full_results['std_f2']:.4f}"
-    )
-    delta = full_results["mean_f2"] - baseline_results["mean_f2"]
-    print(f"Delta F2 (full - baseline) = {delta:+.4f}")
-
-    fig, ax = plt.subplots(figsize=(9, 4))
-    x = np.arange(n_splits)
-    w = 0.35
-    ax.bar(
-        x - w / 2,
-        baseline_results["fold_f2"],
-        w,
-        label="Baseline",
-        color="#5B8DB8",
-        alpha=0.85,
-    )
-    ax.bar(
-        x + w / 2,
-        full_results["fold_f2"],
-        w,
-        label="Full (+ albedo anom.)",
-        color="#E07B39",
-        alpha=0.85,
-    )
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"Fold {i + 1}" for i in x])
-    ax.set_ylabel("F2-score")
-    ax.set_title("Per-fold F2: Baseline vs. Full Model")
-    ax.legend()
-    ax.yaxis.set_major_formatter(mtick.FormatStrFormatter("%.3f"))
-    plt.tight_layout()
-    plt.savefig(output_dir / "f2_comparison_by_fold.png", dpi=150)
-    plt.close()
-
-    return baseline_results, full_results
 
 
 def wilcoxon_test(
@@ -256,8 +160,8 @@ def bootstrap_auc_ci(
 
     Operates on the out-of-fold predicted probabilities, so it is unaffected by
     the per-fold decision threshold — the cleaner comparison for a rare-event
-    forecaster. Paired resampling (same indices for both models) isolates the
-    albedo contribution.
+    forecaster. Paired resampling (same indices for both prediction sets)
+    isolates the difference between them.
     """
     from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -301,128 +205,6 @@ def bootstrap_auc_ci(
     }
 
 
-def plot_pr_curves(
-    baseline_results: dict,
-    full_results: dict,
-    output_dir: str | Path = "outputs",
-) -> None:
-    """Precision-recall curves on concatenated out-of-fold predictions."""
-    from sklearn.metrics import average_precision_score, precision_recall_curve
-
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    y_true = np.concatenate(baseline_results["fold_true"])
-    pb = np.concatenate(baseline_results["fold_proba"])
-    pf = np.concatenate(full_results["fold_proba"])
-    base_rate = y_true.mean()
-
-    fig, ax = plt.subplots(figsize=(6, 5))
-    for proba, label, color in [
-        (pb, "Baseline", "#5B8DB8"),
-        (pf, "Full (+ albedo)", "#E07B39"),
-    ]:
-        prec, rec, _ = precision_recall_curve(y_true, proba)
-        ap = average_precision_score(y_true, proba)
-        ax.plot(rec, prec, color=color, lw=2, label=f"{label} (AP={ap:.3f})")
-    ax.axhline(
-        base_rate, color="grey", ls="--", lw=1,
-        label=f"No-skill ({base_rate:.3f})",
-    )
-    ax.set_xlabel("Recall")
-    ax.set_ylabel("Precision")
-    ax.set_title("Precision–Recall: Baseline vs. Full Model")
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.legend(loc="upper right", fontsize=9)
-    plt.tight_layout()
-    plt.savefig(output_dir / "pr_curves.png", dpi=150)
-    plt.close()
-
-
-def full_statistical_analysis(
-    baseline_results: dict,
-    full_results: dict,
-    n_bootstrap: int = 5000,
-    confidence_level: float = 0.95,
-    random_state: int = 42,
-    output_dir: str | Path = "outputs",
-) -> dict[str, Any]:
-    """Run Wilcoxon test and bootstrap CI; return summary dict."""
-    print("\n" + "=" * 60)
-    print("STATISTICAL COMPARISON SUMMARY")
-    print("=" * 60)
-
-    wtest = wilcoxon_test(baseline_results, full_results)
-
-    y_true_bas, y_pred_bas = concat_cv_results(baseline_results)
-    y_true_ful, y_pred_ful = concat_cv_results(full_results)
-    assert np.array_equal(y_true_bas, y_true_ful), "True labels mismatch!"
-
-    boot = bootstrap_f2_ci(
-        y_true_bas,
-        y_pred_bas,
-        y_pred_ful,
-        n_bootstrap=n_bootstrap,
-        confidence_level=confidence_level,
-        random_state=random_state,
-        output_dir=output_dir,
-    )
-
-    # Threshold-free ranking metrics on out-of-fold probabilities (primary).
-    proba_bas = np.concatenate(baseline_results["fold_proba"])
-    proba_ful = np.concatenate(full_results["fold_proba"])
-    ap_cmp = bootstrap_auc_ci(
-        y_true_bas, proba_bas, proba_ful, metric="ap",
-        n_bootstrap=n_bootstrap, confidence_level=confidence_level,
-        random_state=random_state,
-    )
-    roc_cmp = bootstrap_auc_ci(
-        y_true_bas, proba_bas, proba_ful, metric="roc",
-        n_bootstrap=n_bootstrap, confidence_level=confidence_level,
-        random_state=random_state,
-    )
-    ap_wtest = wilcoxon_test(
-        {"fold_f2": baseline_results["fold_ap"]},
-        {"fold_f2": full_results["fold_ap"]},
-    )
-    plot_pr_curves(baseline_results, full_results, output_dir=output_dir)
-
-    print("\n" + "-" * 64)
-    print(f"{'Metric':<28} {'Baseline':>10} {'Full':>10} {'Delta':>10} {'95% CI':>14}")
-    print("-" * 64)
-    print(
-        f"{'PR-AUC (primary)':<28} {ap_cmp['baseline']:>10.4f} "
-        f"{ap_cmp['full']:>10.4f} {ap_cmp['delta']:>+10.4f} "
-        f"[{ap_cmp['lo']:+.3f},{ap_cmp['hi']:+.3f}]"
-    )
-    print(
-        f"{'ROC-AUC':<28} {roc_cmp['baseline']:>10.4f} "
-        f"{roc_cmp['full']:>10.4f} {roc_cmp['delta']:>+10.4f} "
-        f"[{roc_cmp['lo']:+.3f},{roc_cmp['hi']:+.3f}]"
-    )
-    print(
-        f"{'F2 @ tuned thr (oper.)':<28} {baseline_results['mean_f2']:>10.4f} "
-        f"{full_results['mean_f2']:>10.4f} "
-        f"{full_results['mean_f2'] - baseline_results['mean_f2']:>+10.4f} "
-        f"[{boot['lo']:+.3f},{boot['hi']:+.3f}]"
-    )
-    print("-" * 64)
-
-    return {
-        "wilcoxon": wtest,
-        "bootstrap": boot,
-        "ap": ap_cmp,
-        "roc": roc_cmp,
-        "ap_wilcoxon": ap_wtest,
-        "baseline_mean_f2": baseline_results["mean_f2"],
-        "full_mean_f2": full_results["mean_f2"],
-        "delta_mean_f2": full_results["mean_f2"] - baseline_results["mean_f2"],
-        "baseline_mean_ap": baseline_results["mean_ap"],
-        "full_mean_ap": full_results["mean_ap"],
-    }
-
-
 def run_group_ablation(
     df: pd.DataFrame,
     full_features: list[str],
@@ -431,6 +213,7 @@ def run_group_ablation(
     random_state: int = 42,
     n_bootstrap: int = 2000,
     output_dir: str | Path = "outputs",
+    full_results: dict | None = None,
 ) -> pd.DataFrame:
     """
     Quantify the incremental value of each physical driver group.
@@ -441,7 +224,8 @@ def run_group_ablation(
         incremental(g) = PR-AUC(all) − PR-AUC(all − g)
 
     A paired bootstrap 95% CI entirely above zero means group g contributes
-    skill that no other group supplies — i.e. that driver *actually matters*.
+    skill that no other group supplies — i.e. that driver carries information
+    not already present in the rest of the feature set.
     """
     from src.features import build_feature_groups
     from src.models import run_cross_validation
@@ -455,7 +239,7 @@ def run_group_ablation(
     print("DRIVER ABLATION — incremental PR-AUC by feature group")
     print("=" * 60)
 
-    full_res = run_cross_validation(
+    full_res = full_results or run_cross_validation(
         df, full_features, n_splits=n_splits, random_state=random_state,
         xgb_params=xgb_params, verbose=False,
     )
@@ -519,6 +303,34 @@ def run_group_ablation(
     return table
 
 
+def plot_pr_curve(results: dict, output_dir: str | Path = "outputs") -> None:
+    """Precision-recall curve for the forecast model (out-of-fold predictions)."""
+    from sklearn.metrics import average_precision_score, precision_recall_curve
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    y_true = np.concatenate(results["fold_true"])
+    proba = np.concatenate(results["fold_proba"])
+    base_rate = y_true.mean()
+    ap = average_precision_score(y_true, proba)
+
+    prec, rec, _ = precision_recall_curve(y_true, proba)
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ax.plot(rec, prec, color="#E07B39", lw=2, label=f"Forecast model (AP={ap:.3f})")
+    ax.axhline(base_rate, color="grey", ls="--", lw=1,
+               label=f"No-skill ({base_rate:.3f})")
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title("Precision–Recall — 24-hour dust-onset forecast")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.legend(loc="upper right", fontsize=9)
+    plt.tight_layout()
+    plt.savefig(output_dir / "pr_curve.png", dpi=150)
+    plt.close()
+
+
 def plot_feature_importance(
     df: pd.DataFrame,
     feature_cols: list[str],
@@ -576,40 +388,25 @@ def plot_feature_importance(
 
 
 def write_report(
-    stats: dict,
-    baseline_results: dict,
-    full_results: dict,
+    model_results: dict,
+    ablation_df: pd.DataFrame,
     df: pd.DataFrame,
     output_path: str | Path = "results/report.md",
     data_mode: str = "synthetic",
-    ablation_df: "pd.DataFrame | None" = None,
 ) -> None:
-    """Write final markdown report with all results."""
+    """Write the markdown results report for the driver study."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     n_samples = len(df)
     n_positive = int(df[TARGET].sum())
     pos_rate = 100 * n_positive / n_samples if n_samples else 0
-
-    w = stats["wilcoxon"]
-    b = stats["bootstrap"]
-    ap = stats["ap"]
-    roc = stats["roc"]
-    n_folds = len(full_results["fold_f2"])
-
-    def _sig(lo: float, hi: float) -> str:
-        if lo > 0:
-            return "CI entirely above 0 — full model significantly better"
-        if hi < 0:
-            return "CI entirely below 0 — baseline significantly better"
-        return "CI straddles 0 — no significant difference"
+    n_folds = len(model_results["fold_f2"])
 
     lines = [
-        "# Dust-Storm Onset Prediction — Results Report",
+        "# Dust-Storm Onset Forecasting — Results Report",
         "",
         f"**Data mode:** {data_mode}",
-        "**Generated:** pipeline run",
         "",
         "## Dataset Summary",
         "",
@@ -618,152 +415,128 @@ def write_report(
         f"- Stations: {', '.join(sorted(df['station'].unique()))}",
         f"- Study period: {df['date'].min()} to {df['date'].max()}",
         "",
-        "## Headline Comparison",
+        f"## Forecast Model Performance (TimeSeriesSplit, {n_folds} folds)",
         "",
-        "Primary metric is **PR-AUC (average precision)** — threshold-independent "
-        "and appropriate for this rare-event problem. ROC-AUC is reported "
-        "alongside it; F2 at the per-fold tuned threshold is the **operational** "
-        "metric. All deltas are full − baseline with paired bootstrap 95% CIs "
-        f"(out-of-fold predictions, {n_folds}-fold TimeSeriesSplit).",
+        "Out-of-fold cross-validated skill of the XGBoost forecaster. PR-AUC "
+        "(average precision) is the primary metric for this rare-event problem; "
+        "ROC-AUC and F2 (at a per-fold tuned threshold) are reported alongside.",
         "",
-        "| Metric | Baseline | Full | Δ | 95% CI | Verdict |",
-        "|--------|----------|------|---|--------|---------|",
-        f"| **PR-AUC** (primary) | {ap['baseline']:.4f} | {ap['full']:.4f} | "
-        f"{ap['delta']:+.4f} | [{ap['lo']:+.4f}, {ap['hi']:+.4f}] | {_sig(ap['lo'], ap['hi'])} |",
-        f"| ROC-AUC | {roc['baseline']:.4f} | {roc['full']:.4f} | "
-        f"{roc['delta']:+.4f} | [{roc['lo']:+.4f}, {roc['hi']:+.4f}] | {_sig(roc['lo'], roc['hi'])} |",
-        f"| F2 @ tuned thr (operational) | {baseline_results['mean_f2']:.4f} | "
-        f"{full_results['mean_f2']:.4f} | {stats['delta_mean_f2']:+.4f} | "
-        f"[{b['lo']:+.4f}, {b['hi']:+.4f}] | {_sig(b['lo'], b['hi'])} |",
+        "| Metric | Mean | Std |",
+        "|--------|------|-----|",
+        f"| PR-AUC | {model_results['mean_ap']:.4f} | {model_results['std_ap']:.4f} |",
+        f"| ROC-AUC | {model_results['mean_roc']:.4f} | — |",
+        f"| F2 (operational) | {model_results['mean_f2']:.4f} | {model_results['std_f2']:.4f} |",
         "",
-        f"## Per-Fold Cross-Validation (TimeSeriesSplit, {n_folds} folds)",
-        "",
-        "| Fold | Baseline PR-AUC | Full PR-AUC | Baseline F2 | Full F2 |",
-        "|------|-----------------|-------------|-------------|---------|",
+        "| Fold | PR-AUC | ROC-AUC | F2 |",
+        "|------|--------|---------|----|",
     ]
     for i in range(n_folds):
         lines.append(
-            f"| {i + 1} | {baseline_results['fold_ap'][i]:.4f} | "
-            f"{full_results['fold_ap'][i]:.4f} | "
-            f"{baseline_results['fold_f2'][i]:.4f} | "
-            f"{full_results['fold_f2'][i]:.4f} |"
+            f"| {i + 1} | {model_results['fold_ap'][i]:.4f} | "
+            f"{model_results['fold_roc'][i]:.4f} | "
+            f"{model_results['fold_f2'][i]:.4f} |"
         )
+    lines.append("")
+
+    # Driver ablation — the headline analysis
+    sig = ablation_df[ablation_df["significant"]]
     lines.extend(
         [
-            f"| **Mean** | **{baseline_results['mean_ap']:.4f}** | "
-            f"**{full_results['mean_ap']:.4f}** | "
-            f"**{baseline_results['mean_f2']:.4f}** | "
-            f"**{full_results['mean_f2']:.4f}** |",
+            "## Driver Ablation",
             "",
+            "Incremental skill of each physical driver group: the change in "
+            "PR-AUC when that group is removed and the model retrained "
+            "(model − without-group), with paired bootstrap 95% CIs on the "
+            "out-of-fold predictions. A CI entirely above zero marks a driver "
+            "that carries information not already present in the other features.",
+            "",
+            "| Driver group | # feats | Incremental PR-AUC | 95% CI | Significant |",
+            "|--------------|---------|--------------------|--------|-------------|",
         ]
     )
-
-    # Per-station out-of-fold PR-AUC and F2 (baseline vs full)
-    base_ps = per_station_f2(baseline_results)
-    full_ps = per_station_f2(full_results)
-    if not full_ps.empty:
-        merged = base_ps.merge(
-            full_ps, on=["station", "n", "positives"], suffixes=("_base", "_full")
+    for _, r in ablation_df.iterrows():
+        lines.append(
+            f"| {r['group']} | {int(r['n_features'])} | "
+            f"{r['incremental_pr_auc']:+.4f} | "
+            f"[{r['ci_lo']:+.4f}, {r['ci_hi']:+.4f}] | "
+            f"{'**yes**' if r['significant'] else 'no'} |"
         )
+    if not sig.empty:
+        drivers = ", ".join(sig["group"].tolist())
+        lines += ["", f"**Driver groups with significant incremental skill:** {drivers}."]
+    else:
+        lines += [
+            "",
+            "No single driver group shows statistically significant incremental "
+            "skill at this sample size.",
+        ]
+    lines.append("")
+
+    # Per-station performance
+    ps = per_station_f2(model_results)
+    if not ps.empty:
         lines.extend(
             [
-                "## Per-Station Out-of-Fold Performance",
+                "## Per-Station Performance",
                 "",
-                "| Station | n | Positives | Base PR-AUC | Full PR-AUC | ΔPR-AUC | "
-                "Base F2 | Full F2 |",
-                "|---------|---|-----------|-------------|-------------|---------|"
-                "---------|---------|",
+                "| Station | n | Positives | PR-AUC | F2 | Precision | Recall |",
+                "|---------|---|-----------|--------|----|-----------|--------|",
             ]
         )
-        for _, r in merged.iterrows():
+        for _, r in ps.iterrows():
             lines.append(
                 f"| {r['station']} | {int(r['n'])} | {int(r['positives'])} | "
-                f"{r['ap_base']:.4f} | {r['ap_full']:.4f} | "
-                f"{r['ap_full'] - r['ap_base']:+.4f} | "
-                f"{r['f2_base']:.4f} | {r['f2_full']:.4f} |"
+                f"{r['ap']:.4f} | {r['f2']:.4f} | {r['precision']:.3f} | "
+                f"{r['recall']:.3f} |"
             )
         lines.append("")
 
-    # Driver ablation — the "what actually matters" finding
-    if ablation_df is not None and not ablation_df.empty:
-        sig = ablation_df[ablation_df["significant"]]
-        lines.extend(
-            [
-                "## Driver Ablation — What Actually Matters",
-                "",
-                "Incremental PR-AUC of each physical driver group "
-                "(full model − model without that group), with paired bootstrap "
-                "95% CIs. A CI entirely above zero means the driver contributes "
-                "skill no other group supplies.",
-                "",
-                "| Driver group | # feats | Incremental PR-AUC | 95% CI | Significant |",
-                "|--------------|---------|--------------------|--------|-------------|",
-            ]
-        )
-        for _, r in ablation_df.iterrows():
-            lines.append(
-                f"| {r['group']} | {int(r['n_features'])} | "
-                f"{r['incremental_pr_auc']:+.4f} | "
-                f"[{r['ci_lo']:+.4f}, {r['ci_hi']:+.4f}] | "
-                f"{'**yes**' if r['significant'] else 'no'} |"
-            )
-        if not sig.empty:
-            drivers = ", ".join(sig["group"].tolist())
-            lines += [
-                "",
-                f"**Significant drivers of next-day dust:** {drivers}.",
-            ]
-        lines.append("")
-
-    apw = stats["ap_wilcoxon"]
     lines.extend(
         [
-            "## Statistical Tests",
-            "",
-            "- **Paired bootstrap (5 000 resamples)** on out-of-fold predictions "
-            "gives the 95% CIs in the headline table — the primary inference.",
-            f"- **Wilcoxon signed-rank on per-fold PR-AUC** (n={n_folds}): "
-            f"W={apw['W']:.2f}, p={apw['p']:.4f} "
-            f"({'significant' if apw['p'] < 0.05 else 'not significant'} at α=0.05).",
-            f"- **Wilcoxon signed-rank on per-fold F2** (n={n_folds}): "
-            f"W={w['W']:.2f}, p={w['p']:.4f} "
-            f"({'significant' if w['p'] < 0.05 else 'not significant'} at α=0.05).",
-            "",
             "## Figures",
             "",
-            "- `pr_curves.png` — precision–recall curves (baseline vs full)",
-            "- `f2_comparison_by_fold.png` — per-fold F2 bar chart",
-            "- `bootstrap_delta_f2.png` — bootstrap ΔF2 distribution",
-            "- `shap_importance.png` — SHAP feature importance (full model)",
+            "- `driver_ablation.png` — incremental PR-AUC by driver group",
+            "- `pr_curve.png` — precision–recall curve for the forecast model",
+            "- `shap_importance.png` — SHAP feature importance",
             "",
             "## Conclusion",
             "",
         ]
     )
 
-    if ap["lo"] > 0:
-        lines.append(
-            "On the primary threshold-independent metric (PR-AUC), adding the "
-            "MODIS shortwave broadband albedo anomaly **significantly improves** "
-            "24-hour dust-storm risk ranking: the paired bootstrap 95% CI for "
-            f"ΔPR-AUC is entirely above zero ({ap['delta']:+.4f} "
-            f"[{ap['lo']:+.4f}, {ap['hi']:+.4f}])."
+    if not sig.empty:
+        top = sig.iloc[0]
+        intro = (
+            f"The forecaster attains a cross-validated PR-AUC of "
+            f"{model_results['mean_ap']:.3f} (ROC-AUC {model_results['mean_roc']:.3f}) "
+            f"at a {pos_rate:.1f}% base rate. "
         )
-    elif ap["delta"] > 0:
+        if len(sig) == 1:
+            detail = (
+                f"The driver ablation identifies **{top['group']}** as the only "
+                f"feature group contributing statistically significant incremental "
+                f"skill (ΔPR-AUC {top['incremental_pr_auc']:+.4f}, 95% CI "
+                f"[{top['ci_lo']:+.4f}, {top['ci_hi']:+.4f}]). "
+            )
+        else:
+            drivers = ", ".join(sig["group"].tolist())
+            detail = (
+                f"The driver ablation identifies **{drivers}** as the feature "
+                f"groups contributing statistically significant incremental skill, "
+                f"with **{top['group']}** the strongest (ΔPR-AUC "
+                f"{top['incremental_pr_auc']:+.4f}, 95% CI [{top['ci_lo']:+.4f}, "
+                f"{top['ci_hi']:+.4f}]). "
+            )
         lines.append(
-            "Adding the MODIS albedo anomaly yields a positive but not "
-            f"statistically conclusive PR-AUC gain ({ap['delta']:+.4f}, 95% CI "
-            f"[{ap['lo']:+.4f}, {ap['hi']:+.4f}] includes zero): suggestive "
-            "evidence that surface reflectivity adds incremental dust-forecast "
-            "skill, warranting a larger sample / wider MODIS footprint."
+            intro + detail + "Remaining groups carry information already present "
+            "elsewhere in the feature set."
         )
     else:
         lines.append(
-            "On real observations the MODIS albedo anomaly does not improve "
-            f"PR-AUC ({ap['delta']:+.4f}, 95% CI [{ap['lo']:+.4f}, {ap['hi']:+.4f}]). "
-            "Satellite albedo provides no significant incremental skill over the "
-            "meteorological baseline at these stations; station-level "
-            "heterogeneity is worth follow-up."
+            f"The forecaster attains a cross-validated PR-AUC of "
+            f"{model_results['mean_ap']:.3f} (ROC-AUC {model_results['mean_roc']:.3f}). "
+            "No individual driver group shows significant incremental skill at "
+            "this sample size; performance derives from the combined feature set."
         )
 
     output_path.write_text("\n".join(lines) + "\n")
