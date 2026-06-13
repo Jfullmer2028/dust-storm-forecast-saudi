@@ -388,17 +388,15 @@ def generate_synthetic_station_data(
     * A synoptic index ``S_t`` (AR(1), phi=0.75) drives wind, humidity and
       boundary-layer height, so weather *persists* day to day. Because dust on
       day ``t`` depends on the contemporaneous synoptic state, today's weather
-      carries genuine information about tomorrow's dust — a competent
-      meteorological **baseline** can forecast 24 h ahead (no more 0.000 F2).
+      carries information about tomorrow's dust, giving the meteorological
+      **baseline** genuine 24-hour skill.
 
     * A partly independent surface-erodibility index ``E_t`` (AR(1), phi=0.60)
       is imprinted on the MODIS albedo anomaly and contributes to dust risk one
-      day ahead. The baseline cannot see it, so the **albedo** features carry
-      genuine *incremental* skill — a realistic, modest improvement rather than
-      an artefactual +0.9.
+      day ahead. The baseline cannot see it, so the **albedo** features carry a
+      modest, realistic *incremental* signal.
 
-    Everything is deterministic in ``seed`` + ``station_idx`` (reproducible;
-    no reliance on Python's randomised ``hash``).
+    Everything is deterministic in ``seed`` + ``station_idx`` (reproducible).
     """
     rng = np.random.default_rng(seed + 1000 * (station_idx + 1))
 

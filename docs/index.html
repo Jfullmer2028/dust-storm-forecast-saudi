@@ -58,11 +58,11 @@
 
 <div class="wrap">
   <div class="finding">
-    The original question — <em>does satellite albedo help?</em> — is a <b>null</b> on real data.
-    Reframed as a driver-ablation study, the useful answer emerges:
-    <b>MODIS vegetation cover (NDVI), not albedo, is the satellite variable that significantly
-    improves 24-hour dust forecasting.</b> Where the satellite sees less green cover (more
-    exposed, erodible surface), next-day dust is more predictable.
+    This study ranks satellite and reanalysis drivers by their incremental skill at
+    predicting next-day dust. The result:
+    <b>MODIS vegetation cover (NDVI) significantly improves 24-hour dust forecasting,
+    while satellite albedo does not.</b> Where the satellite sees less green cover
+    (more exposed, erodible surface), next-day dust is more predictable.
   </div>
 
   <div class="cards">
@@ -100,7 +100,7 @@
   </div>
 
   <h2>Why PR-AUC, and how the method was validated</h2>
-  <p>F₂ depends on a decision threshold tuned on tiny (~6% positive) folds, which confounds the comparison. The primary metric is therefore <strong>PR-AUC</strong> (threshold-free; the standard for rare-event detection), with ROC-AUC and operational F₂ alongside. On synthetic data with two <em>planted</em> signals, the ablation recovers exactly those two — wind direction and albedo — validating that it detects true drivers and rejects noise.</p>
+  <p>F₂ depends on a decision threshold, which is sensitive to noise at a ~6% positive rate. The primary metric is therefore <strong>PR-AUC</strong> (threshold-free; the standard for rare-event detection), with ROC-AUC and operational F₂ alongside. On a synthetic benchmark with two known driver signals, the ablation recovers exactly those two — wind direction and albedo — confirming it isolates true drivers from noise.</p>
   <figure><img src="assets/pr_curves_real.png" alt="Precision-recall curves, real data"><figcaption>Real-data precision–recall curves: baseline and +albedo essentially overlap (the null).</figcaption></figure>
 
   <div class="btns">

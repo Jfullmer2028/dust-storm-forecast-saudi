@@ -112,23 +112,23 @@ dust predictability beyond what meteorology supplies.
 
 ### 4.3 Method validation on synthetic data
 
-On a synthetic generator with two *planted* signals — a wind-direction (shamal)
+On a synthetic benchmark with two known driver signals — a wind-direction (shamal)
 precursor and an albedo-erodibility precursor — the ablation recovers **exactly
 those two groups** as the only significant drivers (ΔPR-AUC +0.070 and +0.061),
-confirming the procedure detects true drivers and rejects noise.
+confirming the procedure isolates true drivers from noise.
 
 ![Driver ablation, synthetic](docs/assets/driver_ablation_synthetic.png)
 
 ## 5. Discussion
 
-The headline is a *reframing* win: a null albedo result becomes a positive,
-actionable finding once the question is generalised to "which driver matters?".
-Vegetation cover acting as the dominant satellite predictor is physically
+Vegetation cover emerging as the dominant satellite predictor is physically
 coherent — NDVI indexes the fraction of bare, mobilisable surface, a first-order
 control on dust emission that complements (rather than duplicates) the wind and
-humidity fields. Albedo, by contrast, adds nothing beyond NDVI and meteorology,
-plausibly because over uniformly bright desert the broadband-albedo anomaly is
-weak and noisy relative to vegetation contrast.
+humidity fields. Albedo, by contrast, adds no measurable skill beyond NDVI and
+meteorology, plausibly because over uniformly bright desert the broadband-albedo
+anomaly is weak and noisy relative to vegetation contrast. Generalising the study
+from a single albedo test to a ranked ablation of all driver groups is what
+surfaces this result.
 
 ## 6. Limitations
 

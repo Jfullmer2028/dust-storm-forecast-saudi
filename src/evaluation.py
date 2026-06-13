@@ -762,8 +762,8 @@ def write_report(
             "On real observations the MODIS albedo anomaly does not improve "
             f"PR-AUC ({ap['delta']:+.4f}, 95% CI [{ap['lo']:+.4f}, {ap['hi']:+.4f}]). "
             "Satellite albedo provides no significant incremental skill over the "
-            "meteorological baseline at these stations — an honest null result, "
-            "with station-level heterogeneity worth follow-up."
+            "meteorological baseline at these stations; station-level "
+            "heterogeneity is worth follow-up."
         )
 
     output_path.write_text("\n".join(lines) + "\n")

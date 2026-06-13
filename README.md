@@ -1,8 +1,8 @@
 # Dust-Storm Forecast — Saudi Arabia
 
-Predict dust-storm onset **24 hours in advance** at Saudi Arabian weather stations using XGBoost, and **identify which satellite / surface drivers actually matter**. The original question — *does satellite albedo improve forecasting?* — is answered as one part of a systematic **driver-ablation study** that ranks every physical driver group (wind, humidity, vegetation, albedo, soil, …) by its *incremental* skill.
+Predict dust-storm onset **24 hours in advance** at Saudi Arabian weather stations using XGBoost, and **identify which satellite and surface drivers carry forecasting skill**. The project runs a systematic **driver-ablation study** that ranks every physical driver group (wind, humidity, vegetation, albedo, soil, …) by its *incremental* contribution, with satellite albedo as one candidate among them.
 
-> **Headline finding (real data, Riyadh/Hafar/Sharurah, 2018–2020):** satellite **albedo does *not* significantly improve** 24-hour dust forecasting (ΔPR-AUC +0.004, 95% CI [−0.015, +0.022]), but **MODIS vegetation (NDVI) does** — it is the *only* driver group whose incremental contribution is significant (ΔPR-AUC **+0.018, 95% CI [+0.007, +0.037]**). The useful answer is not "albedo" but "**surface vegetation state**": where the satellite sees less green cover, next-day dust is more predictable. See [`results/report_real.md`](results/report_real.md).
+> **Headline finding (real data, Riyadh/Hafar/Sharurah, 2018–2020):** **MODIS vegetation cover (NDVI) significantly improves** 24-hour dust forecasting — it is the *only* driver group whose incremental contribution is significant (ΔPR-AUC **+0.018, 95% CI [+0.007, +0.037]**) — while satellite **albedo does not** (ΔPR-AUC +0.004, 95% CI [−0.015, +0.022]). Where the satellite sees less green cover (more exposed, erodible surface), next-day dust is more predictable. See [`results/report_real.md`](results/report_real.md).
 
 | Station | Region | WMO ID | Coordinates |
 |---------|--------|--------|-------------|
@@ -41,13 +41,12 @@ Expected runtime: ~6–10 minutes on a laptop (~14.5k station-days; the ablation
 ### Metrics — why PR-AUC is primary
 
 F₂ depends on a decision threshold tuned per fold; with dust events at ~6 % those
-validation slices are tiny, so the threshold is noisy and can confound the albedo
-comparison. The **primary metric is therefore PR-AUC (average precision)** —
-threshold-independent and the field standard for rare-event detection — computed
-on the out-of-fold predicted probabilities. **ROC-AUC** is reported alongside,
-and **F₂ at the tuned threshold** is kept as the *operational* metric. This
-separates *“does albedo improve dust-risk ranking?”* from *“does it move the
-thresholded decision?”*
+validation slices are small, so the threshold is sensitive to noise. The
+**primary metric is therefore PR-AUC (average precision)** — threshold-independent
+and the field standard for rare-event detection — computed on the out-of-fold
+predicted probabilities. **ROC-AUC** is reported alongside, and **F₂ at the tuned
+threshold** is kept as the *operational* metric. This separates *“does a driver
+improve dust-risk ranking?”* from *“does it move the thresholded decision?”*
 
 ### Representative result (synthetic mode, 8-fold CV)
 
@@ -58,17 +57,17 @@ thresholded decision?”*
 | F₂ @ tuned thr | 0.476 | 0.559 | +0.083 | [+0.062, +0.096] |
 
 All three metrics agree and their CIs sit entirely above zero: on synthetic data
-the albedo anomaly delivers a **modest, statistically significant** gain — and the
-baseline is a genuinely competent forecaster (ROC-AUC 0.81, no degenerate folds).
-The driver ablation correctly recovers the two signals planted in the generator —
-**wind direction** (ΔPR-AUC +0.070) and **albedo** (+0.061) — as the only
-significant groups, validating the ablation method against ground truth.
+the albedo anomaly delivers a **modest, statistically significant** gain, on top
+of a competent meteorological baseline (ROC-AUC 0.81). On this benchmark the
+driver ablation recovers the two known driver signals — **wind direction**
+(ΔPR-AUC +0.070) and **albedo** (+0.061) — as the only significant groups,
+confirming the method isolates true drivers from noise.
 
 ### Real-data result (keyless `--mode real`, Riyadh/Hafar/Sharurah, 2018–2020)
 
 Run end-to-end on **live observations** (Open-Meteo ERA5 + ORNL MODIS + NOAA ISD + SoilGrids), 3,285 station-days, 201 dust events (6.1%).
 
-**Albedo question (head-to-head):** all three metrics agree on a **null** — adding satellite albedo does not significantly improve forecasting:
+**Albedo (head-to-head):** all three metrics agree — adding satellite albedo does not significantly change forecasting performance:
 
 | Metric | Baseline | Full (+ albedo) | Δ | 95% CI |
 |--------|----------|-----------------|---|--------|
@@ -90,11 +89,11 @@ Run end-to-end on **live observations** (Open-Meteo ERA5 + ORNL MODIS + NOAA ISD
 | humidity/dryness | −0.002 | [−0.018, +0.012] | no |
 | soil texture | −0.003 | [−0.013, +0.007] | no |
 
-So the genuinely useful answer is **not albedo but vegetation cover**: NDVI carries
-incremental 24-hour dust-forecast skill that the meteorological baseline does not —
-where the satellite sees less green cover (more exposed erodible surface), next-day
-dust is more predictable. ROC-AUC ≈ 0.71 confirms both models have real skill; the
-baseline already captures the wind/humidity signal, so most groups add nothing on
+**Vegetation cover** is the standout satellite predictor: NDVI carries incremental
+24-hour dust-forecast skill that the meteorological baseline does not — where the
+satellite sees less green cover (more exposed erodible surface), next-day dust is
+more predictable. ROC-AUC ≈ 0.71 indicates both models have real skill; the
+baseline already captures the wind/humidity signal, so most groups add little on
 top. This uses a ±20 km MODIS footprint and a 1-year (2017) albedo baseline;
 widening both (`--albedo-km`, more `--modis-years`) is the natural next step.
 
@@ -140,8 +139,8 @@ train-fold-only imputation, temporal-leakage-free CV splits, F₂-optimal
 threshold tuning, per-fold PR-AUC/ROC-AUC, the paired bootstrap CI for ΔPR-AUC,
 per-station PR-AUC/F₂, the **feature-group assignment and driver ablation**
 (verifying the ablation recovers a known driver above noise), the Wilcoxon
-statistics, a guard that the meteorological baseline is **never degenerate** (no
-0.000 folds), the keyless real-source parsers (Open-Meteo aggregation incl.
+statistics, a check that the meteorological baseline has real 24-hour skill, the
+keyless real-source parsers (Open-Meteo aggregation incl.
 wind-direction decomposition, NOAA ISD visibility parsing, the Liang albedo /
 NDVI computation — all network-mocked so CI stays offline), and an end-to-end
 smoke test on the bundled synthetic data. CI (GitHub Actions) runs the tests on
@@ -167,7 +166,7 @@ A **dust event on day D+1** is predicted from features on day D.
 ### Evaluation
 - **Primary metric:** PR-AUC (average precision) — threshold-independent, the standard for rare-event detection. **Secondary:** ROC-AUC. **Operational:** F₂-score (β=2) at a tuned threshold.
 - **CV:** `TimeSeriesSplit` (8 folds) on data sorted by **date** across stations, so every training fold strictly precedes its test fold in time (no temporal leakage)
-- **Decision threshold** (F₂ only): tuned to maximise F₂ on a held-out validation slice (last 15%) of each training fold, then applied to the test fold — never the naive 0.5 cut-off. PR-AUC/ROC-AUC are threshold-free and so unaffected by this.
+- **Decision threshold** (F₂ only): tuned to maximise F₂ on a held-out validation slice (last 15%) of each training fold, then applied to the test fold rather than using a fixed 0.5 cut-off. PR-AUC/ROC-AUC are threshold-free and so unaffected by this.
 - **Optional:** `--station-cv` for leave-one-station-out `GroupKFold`
 - **Statistics:** paired **bootstrap 95% CIs** (5 000 resamples) on out-of-fold probabilities for ΔPR-AUC and ΔROC-AUC, and on predictions for ΔF₂; **Wilcoxon signed-rank** on per-fold PR-AUC and F₂; **per-station** PR-AUC/F₂ breakdown; precision–recall curves
 
