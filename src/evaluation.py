@@ -29,6 +29,33 @@ def concat_cv_results(results: dict) -> tuple[np.ndarray, np.ndarray]:
     return y_true, y_pred
 
 
+def per_station_f2(results: dict) -> pd.DataFrame:
+    """F2, precision and recall per station over all out-of-fold predictions."""
+    from sklearn.metrics import precision_score, recall_score
+
+    if "fold_station" not in results:
+        return pd.DataFrame()
+
+    y_true = np.concatenate(results["fold_true"])
+    y_pred = np.concatenate(results["fold_preds"])
+    stations = np.concatenate(results["fold_station"])
+
+    rows = []
+    for st in sorted(np.unique(stations)):
+        m = stations == st
+        rows.append(
+            {
+                "station": st,
+                "n": int(m.sum()),
+                "positives": int(y_true[m].sum()),
+                "f2": fbeta_score(y_true[m], y_pred[m], beta=2, zero_division=0),
+                "precision": precision_score(y_true[m], y_pred[m], zero_division=0),
+                "recall": recall_score(y_true[m], y_pred[m], zero_division=0),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def evaluate_both_models(
     df: pd.DataFrame,
     n_splits: int = 5,
@@ -349,7 +376,7 @@ def write_report(
         f"- Stations: {', '.join(sorted(df['station'].unique()))}",
         f"- Study period: {df['date'].min()} to {df['date'].max()}",
         "",
-        "## Cross-Validation Results (TimeSeriesSplit, 5 folds)",
+        f"## Cross-Validation Results (TimeSeriesSplit, {len(full_results['fold_f2'])} folds)",
         "",
         "### Baseline Model (ERA5 + soil + NDVI, no albedo)",
         "",
@@ -383,6 +410,34 @@ def write_report(
             f"| Mean F2 (CV) | {baseline_results['mean_f2']:.4f} | "
             f"{full_results['mean_f2']:.4f} | {stats['delta_mean_f2']:+.4f} |",
             "",
+        ]
+    )
+
+    # Per-station out-of-fold F2 (baseline vs full)
+    base_ps = per_station_f2(baseline_results)
+    full_ps = per_station_f2(full_results)
+    if not full_ps.empty:
+        merged = base_ps.merge(
+            full_ps, on=["station", "n", "positives"], suffixes=("_base", "_full")
+        )
+        lines.extend(
+            [
+                "## Per-Station Out-of-Fold F2",
+                "",
+                "| Station | n | Positives | Baseline F2 | Full F2 | Delta |",
+                "|---------|---|-----------|-------------|---------|-------|",
+            ]
+        )
+        for _, r in merged.iterrows():
+            lines.append(
+                f"| {r['station']} | {int(r['n'])} | {int(r['positives'])} | "
+                f"{r['f2_base']:.4f} | {r['f2_full']:.4f} | "
+                f"{r['f2_full'] - r['f2_base']:+.4f} |"
+            )
+        lines.append("")
+
+    lines.extend(
+        [
             "## Statistical Tests",
             "",
             "### Wilcoxon Signed-Rank Test (per-fold F2 differences)",

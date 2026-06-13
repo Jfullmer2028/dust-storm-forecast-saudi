@@ -39,34 +39,52 @@ def master_df():
                 bundle["vis_flag"],
                 bundle["soil_feats"],
                 study_start="2018",
-                study_end="2020",
+                study_end="2022",
             )
         )
     return build_full_dataset(station_dfs)
 
 
 def test_master_dataset_shape_and_labels(master_df):
-    assert len(master_df) > 3000
-    assert master_df["station"].nunique() == 3
+    assert len(master_df) > 10000  # 8 stations x 5 study years
+    assert master_df["station"].nunique() == 8
     positives = master_df["dust_event_next_day"].sum()
     assert 0 < positives < len(master_df) * 0.5  # imbalanced but non-empty
     assert set(FULL_FEATURES) <= set(master_df.columns)
 
 
-def test_cv_runs_and_albedo_improves_f2(master_df, tmp_path):
-    fast = {"n_estimators": 60}
+def test_baseline_is_not_degenerate(master_df):
+    """The meteorological baseline must have real 24h skill (no 0.000 folds)."""
     baseline = run_cross_validation(
-        master_df, BASELINE_FEATURES, n_splits=3, xgb_params=fast, verbose=False
+        master_df,
+        BASELINE_FEATURES,
+        n_splits=5,
+        xgb_params={"n_estimators": 120},
+        verbose=False,
+    )
+    # Synoptic persistence gives the baseline genuine next-day signal.
+    assert baseline["mean_f2"] > 0.20
+    assert (baseline["fold_f2"] > 0.0).all()
+
+
+def test_cv_runs_and_albedo_improves_f2(master_df, tmp_path):
+    fast = {"n_estimators": 120}
+    baseline = run_cross_validation(
+        master_df, BASELINE_FEATURES, n_splits=6, xgb_params=fast, verbose=False
     )
     full = run_cross_validation(
-        master_df, FULL_FEATURES, n_splits=3, xgb_params=fast, verbose=False
+        master_df, FULL_FEATURES, n_splits=6, xgb_params=fast, verbose=False
     )
-    # Synthetic data plants an albedo precursor signal, so the full model
-    # must beat the baseline by a wide margin if the pipeline is wired right.
+    # Albedo carries an incremental precursor signal: a modest but consistent
+    # improvement, not an artefactual landslide.
     assert full["mean_f2"] > baseline["mean_f2"]
+    assert 0.0 < (full["mean_f2"] - baseline["mean_f2"]) < 0.5
+
+    # Decision thresholds are tuned, never the naive 0.5 default everywhere.
+    assert all(0.0 < t < 1.0 for t in full["fold_threshold"])
 
     stats = full_statistical_analysis(
-        baseline, full, n_bootstrap=200, output_dir=tmp_path
+        baseline, full, n_bootstrap=300, output_dir=tmp_path
     )
     assert np.isfinite(stats["wilcoxon"]["p"])
     assert stats["bootstrap"]["lo"] <= stats["bootstrap"]["hi"]

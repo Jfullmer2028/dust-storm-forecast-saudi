@@ -102,6 +102,8 @@ def run_cross_validation(
     fold_preds: list[np.ndarray] = []
     fold_true: list[np.ndarray] = []
     fold_proba: list[np.ndarray] = []
+    fold_station: list[np.ndarray] = []
+    fold_threshold: list[float] = []
 
     for fold_idx, (train_idx, test_idx) in enumerate(splits):
         X_train, X_test = X[train_idx], X[test_idx]
@@ -113,35 +115,40 @@ def run_cross_validation(
 
         X_train_imp, X_test_imp = _impute_train_test(X_train, X_test)
 
-        val_size = max(int(0.1 * len(X_train_imp)), 1)
+        # Hold out the most recent slice of the training fold to choose the
+        # decision threshold — never the test fold, so there is no leakage.
+        val_size = max(int(0.15 * len(X_train_imp)), 1)
         X_tr = X_train_imp[:-val_size]
         X_val = X_train_imp[-val_size:]
         y_tr = y_train[:-val_size]
         y_val = y_train[-val_size:]
 
         model = _make_xgb_classifier(spw, xgb_params, random_state)
+        model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
 
-        model.fit(
-            X_tr,
-            y_tr,
-            eval_set=[(X_val, y_val)],
-            verbose=False,
-        )
+        # Pick the probability threshold that maximises F2 on the validation
+        # slice, then apply it to the held-out test fold. This replaces the
+        # naive 0.5 cut-off that produced degenerate 0.000 F2 scores.
+        val_proba = model.predict_proba(X_val)[:, 1]
+        threshold = optimal_f2_threshold(y_val, val_proba, beta=2.0)
 
-        y_pred = model.predict(X_test_imp)
         y_proba = model.predict_proba(X_test_imp)[:, 1]
+        y_pred = (y_proba >= threshold).astype(int)
 
         f2 = fbeta_score(y_test, y_pred, beta=2, zero_division=0)
         fold_f2.append(f2)
         fold_preds.append(y_pred)
         fold_true.append(y_test)
         fold_proba.append(y_proba)
+        fold_station.append(groups[test_idx])
+        fold_threshold.append(threshold)
 
         if verbose:
             print(
                 f"  Fold {fold_idx + 1}: F2={f2:.4f}  "
                 f"Precision={precision_score(y_test, y_pred, zero_division=0):.3f}  "
                 f"Recall={recall_score(y_test, y_pred, zero_division=0):.3f}  "
+                f"thr={threshold:.2f}  "
                 f"(+:{y_test.sum()}  -:{(y_test == 0).sum()})"
             )
 
@@ -152,6 +159,8 @@ def run_cross_validation(
         "fold_preds": fold_preds,
         "fold_true": fold_true,
         "fold_proba": fold_proba,
+        "fold_station": fold_station,
+        "fold_threshold": fold_threshold,
         "feature_cols": feature_cols,
     }
 

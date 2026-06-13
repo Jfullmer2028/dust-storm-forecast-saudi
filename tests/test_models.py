@@ -63,8 +63,20 @@ class TestRunCrossValidation:
             verbose=False,
         )
         assert len(results["fold_f2"]) == 3
-        assert {"mean_f2", "std_f2", "fold_preds", "fold_true"} <= set(results)
+        assert {
+            "mean_f2",
+            "std_f2",
+            "fold_preds",
+            "fold_true",
+            "fold_station",
+            "fold_threshold",
+        } <= set(results)
         assert all(0.0 <= f <= 1.0 for f in results["fold_f2"])
+        # Per-test-row station labels are tracked for the per-station report.
+        assert len(np.concatenate(results["fold_station"])) == len(
+            np.concatenate(results["fold_true"])
+        )
+        assert all(0.0 < t < 1.0 for t in results["fold_threshold"])
 
     def test_missing_feature_raises(self):
         df = _make_cv_frame()
