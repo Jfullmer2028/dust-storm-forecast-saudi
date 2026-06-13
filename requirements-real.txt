@@ -1,0 +1,9 @@
+# OPTIONAL — only for the Google Earth Engine + Copernicus CDS real-data path
+# in src/acquisition.py (native MCD43A3 albedo and the ERA5 archive).
+#
+# The DEFAULT `--mode real` path is keyless (Open-Meteo + ORNL DAAC + NOAA ISD
+# + SoilGrids) and needs nothing beyond requirements.txt.
+earthengine-api>=0.1.370
+cdsapi>=0.7.0
+isd>=0.3.0
+netCDF4>=1.6.0

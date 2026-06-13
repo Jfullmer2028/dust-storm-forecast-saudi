@@ -111,6 +111,9 @@ BASELINE_FEATURES = [
     "sm_mean",
     "soilt_mean",
     "ustar_max",
+    "wind_n_mean",
+    "wind_e_mean",
+    "northerly_frac",
     "precip_sum",
     "precip_7d",
     *[f"{c}_lag{l}" for c in ERA5_LAG_COLS for l in [1, 2, 3]],
@@ -135,3 +138,88 @@ ALBEDO_FEATURES = [
 ]
 
 FULL_FEATURES = BASELINE_FEATURES + ALBEDO_FEATURES
+
+
+# ---------------------------------------------------------------------------
+# Feature sets for the keyless real-data path (Open-Meteo ERA5 + ORNL MODIS).
+# Open-Meteo's archive does not expose boundary-layer height, friction velocity
+# or column water vapour, so the real baseline uses the available daily fields
+# (plus gust, VPD and cloud cover, which are strong dust proxies) instead.
+# ---------------------------------------------------------------------------
+
+REAL_LAG_COLS = ["ws_max", "ws_mean", "rh_mean", "sm_mean", "t2m_mean"]
+
+REAL_BASELINE_FEATURES = [
+    "ws_max",
+    "ws_mean",
+    "gust_max",
+    "rh_mean",
+    "rh_min",
+    "t2m_mean",
+    "t2m_max",
+    "td_mean",
+    "sp_mean",
+    "sm_mean",
+    "soilt_mean",
+    "cloud_mean",
+    "vpd_mean",
+    "wind_n_mean",
+    "wind_e_mean",
+    "northerly_frac",
+    "precip_sum",
+    "precip_7d",
+    *[f"{c}_lag{l}" for c in REAL_LAG_COLS for l in [1, 2, 3]],
+    *[f"{c}_diff{d}" for c in REAL_LAG_COLS for d in [1, 2]],
+    "ndvi",
+    "soil_clay_0-5cm",
+    "soil_sand_0-5cm",
+    "soil_silt_0-5cm",
+    "soil_ocs_0-5cm",
+    "soil_bdod_0-5cm",
+    "doy_sin",
+    "doy_cos",
+    "month_sin",
+    "month_cos",
+]
+
+REAL_FULL_FEATURES = REAL_BASELINE_FEATURES + ALBEDO_FEATURES
+
+
+# ---------------------------------------------------------------------------
+# Physically-motivated feature groups for the driver-ablation analysis.
+# Each group is a candidate "driver" of next-day dust whose incremental value
+# we quantify by dropping it and measuring the change in PR-AUC.
+# ---------------------------------------------------------------------------
+
+def assign_group(feature: str) -> str:
+    """Map a feature name to its physical driver group."""
+    f = feature
+    if "albedo" in f:
+        return "albedo"
+    if f.startswith(("wind_n", "wind_e", "northerly", "wdir")):
+        return "wind_direction"
+    if f.startswith(("ws_", "gust", "ustar")):
+        return "wind_speed"
+    if f.startswith(("rh_", "td_", "vpd", "tcwv", "cloud")):
+        return "humidity_dryness"
+    if f.startswith(("sm_", "precip")):
+        return "antecedent_moisture"
+    if f.startswith(("t2m", "soilt", "blh")):
+        return "thermal_blh"
+    if f.startswith("sp"):
+        return "pressure"
+    if f.startswith("ndvi"):
+        return "vegetation"
+    if f.startswith("soil_"):
+        return "soil_texture"
+    if f.startswith(("doy_", "month_")):
+        return "seasonality"
+    return "other"
+
+
+def build_feature_groups(features: list[str]) -> dict[str, list[str]]:
+    """Bucket a feature list into ordered driver groups (non-empty only)."""
+    groups: dict[str, list[str]] = {}
+    for f in features:
+        groups.setdefault(assign_group(f), []).append(f)
+    return groups

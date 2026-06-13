@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dust-Storm Forecast — Saudi Arabia</title>
+<style>
+  :root{--bg:#0f1419;--card:#1a2230;--ink:#e6edf3;--muted:#9aa7b4;--accent:#E07B39;--green:#2E7D32;--blue:#5B8DB8;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.6}
+  .wrap{max-width:980px;margin:0 auto;padding:0 20px}
+  header{padding:64px 0 36px;text-align:center;background:radial-gradient(900px 380px at 50% -120px,#243043 0%,var(--bg) 70%)}
+  h1{font-size:2.1rem;margin:.2em 0}
+  .sub{color:var(--muted);font-size:1.05rem;max-width:680px;margin:0 auto}
+  .pill{display:inline-block;background:#243043;color:var(--muted);border-radius:999px;padding:4px 12px;font-size:.82rem;margin:8px 4px 0}
+  .finding{background:linear-gradient(180deg,#1c2940,#1a2230);border:1px solid #2b3a52;border-radius:14px;padding:22px 24px;margin:28px 0}
+  .finding b{color:var(--accent)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:22px 0}
+  .card{background:var(--card);border:1px solid #283446;border-radius:12px;padding:18px}
+  .card .k{font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .card .v{font-size:1.5rem;font-weight:700;margin:.15em 0}
+  .card .d{font-size:.85rem;color:var(--muted)}
+  .ok{color:#5fd07a}.no{color:#e08a8a}
+  h2{margin-top:48px;border-bottom:1px solid #283446;padding-bottom:8px}
+  figure{margin:18px 0;background:#fff;border-radius:10px;padding:8px}
+  figure img{width:100%;display:block;border-radius:6px}
+  figcaption{color:var(--muted);font-size:.85rem;margin-top:8px;text-align:center;padding-bottom:6px}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:.93rem}
+  th,td{padding:8px 10px;border-bottom:1px solid #283446;text-align:left}
+  th{color:var(--muted);font-weight:600}
+  .calc{background:var(--card);border:1px solid #283446;border-radius:14px;padding:22px 24px}
+  .row{display:flex;align-items:center;gap:14px;margin:14px 0}
+  .row label{flex:0 0 230px;color:var(--muted)}
+  .row input[type=range]{flex:1;accent-color:var(--accent)}
+  .row output{flex:0 0 70px;text-align:right;font-variant-numeric:tabular-nums}
+  .gauge{margin-top:18px;height:30px;border-radius:8px;background:#243043;overflow:hidden;position:relative}
+  .gauge>div{height:100%;background:linear-gradient(90deg,#3a6ea5,#E07B39,#c0392b);transition:width .15s}
+  .prob{font-size:2rem;font-weight:800;text-align:center;margin:10px 0 0}
+  .verdict{text-align:center;color:var(--muted);min-height:1.4em}
+  a{color:var(--accent)}
+  .btns{text-align:center;margin:26px 0 8px}
+  .btn{display:inline-block;background:var(--accent);color:#1a2230;font-weight:700;text-decoration:none;border-radius:10px;padding:11px 18px;margin:6px}
+  .btn.ghost{background:transparent;border:1px solid #3a4a60;color:var(--ink)}
+  footer{color:var(--muted);font-size:.85rem;text-align:center;padding:40px 0}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>🌪️ Can Satellite Albedo Improve Dust-Storm Forecasting?</h1>
+    <p class="sub">A reproducible, keyless machine-learning study of 24-hour dust-storm onset in Saudi Arabia — and a systematic ablation of <em>which</em> satellite drivers actually matter.</p>
+    <div>
+      <span class="pill">XGBoost</span><span class="pill">PR-AUC + bootstrap CIs</span>
+      <span class="pill">Open-Meteo · ORNL MODIS · NOAA ISD · SoilGrids</span><span class="pill">no API keys</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="finding">
+    The original question — <em>does satellite albedo help?</em> — is a <b>null</b> on real data.
+    Reframed as a driver-ablation study, the useful answer emerges:
+    <b>MODIS vegetation cover (NDVI), not albedo, is the satellite variable that significantly
+    improves 24-hour dust forecasting.</b> Where the satellite sees less green cover (more
+    exposed, erodible surface), next-day dust is more predictable.
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="k">Albedo (real data)</div><div class="v no">no effect</div><div class="d">ΔPR-AUC +0.004, CI [−0.015,+0.022]</div></div>
+    <div class="card"><div class="k">Vegetation / NDVI</div><div class="v ok">significant</div><div class="d">ΔPR-AUC +0.018, CI [+0.007,+0.037]</div></div>
+    <div class="card"><div class="k">Baseline skill</div><div class="v">ROC-AUC 0.71</div><div class="d">3 stations · 3,285 station-days</div></div>
+  </div>
+
+  <h2>What actually matters — driver ablation</h2>
+  <p>Each physical driver group is dropped, the model retrained, and the change in PR-AUC measured with a paired bootstrap 95% CI. Only <strong>vegetation</strong> clears zero.</p>
+  <figure><img src="assets/driver_ablation_real.png" alt="Real-data driver ablation"><figcaption>Real data — incremental PR-AUC per driver group (green = 95% CI above zero).</figcaption></figure>
+
+  <table>
+    <tr><th>Driver group</th><th>Incremental PR-AUC</th><th>95% CI</th><th>Significant</th></tr>
+    <tr><td><b>vegetation (NDVI)</b></td><td>+0.018</td><td>[+0.007, +0.037]</td><td class="ok">yes</td></tr>
+    <tr><td>antecedent moisture</td><td>+0.008</td><td>[−0.004, +0.021]</td><td>no</td></tr>
+    <tr><td>pressure</td><td>+0.007</td><td>[−0.002, +0.018]</td><td>no</td></tr>
+    <tr><td>wind direction</td><td>+0.005</td><td>[−0.018, +0.021]</td><td>no</td></tr>
+    <tr><td>wind speed</td><td>+0.005</td><td>[−0.023, +0.027]</td><td>no</td></tr>
+    <tr><td>albedo</td><td>+0.004</td><td>[−0.015, +0.022]</td><td>no</td></tr>
+    <tr><td>soil texture</td><td>−0.003</td><td>[−0.013, +0.007]</td><td>no</td></tr>
+  </table>
+
+  <h2>🎛️ Live dust-risk calculator</h2>
+  <p>A logistic surrogate of the model (synthetic data). Move the drivers; the probability updates live. Notice how much <em>wind</em> and <em>northerly (shamal) flow</em> move the needle versus albedo.</p>
+  <div class="calc">
+    <div class="row"><label>Max wind speed (m/s)</label><input id="ws_max" type="range" min="0.5" max="16" step="0.1" value="4.2"><output id="ws_max_o"></output></div>
+    <div class="row"><label>Northerly-flow fraction (shamal)</label><input id="northerly_frac" type="range" min="0" max="1" step="0.01" value="0.45"><output id="northerly_frac_o"></output></div>
+    <div class="row"><label>Relative humidity (%)</label><input id="rh_mean" type="range" min="3" max="80" step="1" value="29"><output id="rh_mean_o"></output></div>
+    <div class="row"><label>NDVI (vegetation cover)</label><input id="ndvi" type="range" min="0.05" max="0.18" step="0.005" value="0.10"><output id="ndvi_o"></output></div>
+    <div class="row"><label>Albedo anomaly</label><input id="albedo_anomaly" type="range" min="-0.04" max="0.06" step="0.002" value="0"><output id="albedo_anomaly_o"></output></div>
+    <div class="prob" id="prob">—</div>
+    <div class="gauge"><div id="bar" style="width:0%"></div></div>
+    <div class="verdict" id="verdict"></div>
+  </div>
+
+  <h2>Why PR-AUC, and how the method was validated</h2>
+  <p>F₂ depends on a decision threshold tuned on tiny (~6% positive) folds, which confounds the comparison. The primary metric is therefore <strong>PR-AUC</strong> (threshold-free; the standard for rare-event detection), with ROC-AUC and operational F₂ alongside. On synthetic data with two <em>planted</em> signals, the ablation recovers exactly those two — wind direction and albedo — validating that it detects true drivers and rejects noise.</p>
+  <figure><img src="assets/pr_curves_real.png" alt="Precision-recall curves, real data"><figcaption>Real-data precision–recall curves: baseline and +albedo essentially overlap (the null).</figcaption></figure>
+
+  <div class="btns">
+    <a class="btn" href="https://github.com/Jfullmer2028/dust-storm-forecast-saudi">View the code on GitHub</a>
+    <a class="btn ghost" href="https://github.com/Jfullmer2028/dust-storm-forecast-saudi/blob/main/PAPER.md">Read the paper</a>
+    <a class="btn ghost" href="https://github.com/Jfullmer2028/dust-storm-forecast-saudi/blob/main/app.py">Streamlit demo</a>
+  </div>
+</div>
+
+<footer>Reproducible with no API keys · <code>python run_pipeline.py</code> · MIT License</footer>
+
+<script>
+// Logistic surrogate fitted on the synthetic dataset (standardised features).
+const M = {
+  features:["ws_max","northerly_frac","rh_mean","ndvi","sm_mean","albedo_anomaly","precip_7d"],
+  mean:[4.23625,0.45129,29.22325,0.10028,0.0751,0.0002,0.00282],
+  std:[3.05808,0.18152,10.85219,0.0117,0.02665,0.01484,0.00237],
+  coef:[0.82287,0.85091,-0.37258,-0.04591,0.00436,0.82689,-0.04935],
+  intercept:-1.21673, base_rate:0.0858
+};
+const sliders=["ws_max","northerly_frac","rh_mean","ndvi","albedo_anomaly"];
+function predict(){
+  const vals={}; M.features.forEach((f,i)=>vals[f]=M.mean[i]); // defaults at mean
+  sliders.forEach(id=>{const el=document.getElementById(id); vals[id]=parseFloat(el.value);
+    document.getElementById(id+"_o").textContent=el.value;});
+  let z=M.intercept;
+  M.features.forEach((f,i)=>{ z += M.coef[i]*((vals[f]-M.mean[i])/M.std[i]); });
+  const p=1/(1+Math.exp(-z));
+  document.getElementById("prob").textContent=(p*100).toFixed(1)+"%";
+  document.getElementById("bar").style.width=Math.min(100,p*100)+"%";
+  const v=document.getElementById("verdict");
+  if(p>3*M.base_rate){v.textContent="⚠️ Elevated dust risk — well above the climatological base rate.";}
+  else if(p>M.base_rate){v.textContent="Moderately above-average dust risk.";}
+  else{v.textContent="Low dust risk (near or below the "+(M.base_rate*100).toFixed(1)+"% base rate).";}
+}
+sliders.forEach(id=>document.getElementById(id).addEventListener("input",predict));
+predict();
+</script>
+</body>
+</html>

@@ -107,7 +107,7 @@ def get_albedo_timeseries(
     roi = point.buffer(radius_m)
 
     collection = (
-        ee.ImageCollection("MODIS/006/MCD43A3")
+        ee.ImageCollection("MODIS/061/MCD43A3")
         .filterDate(start, end)
         .filterBounds(roi)
         .select("Albedo_WSA_shortwave")
@@ -158,7 +158,7 @@ def get_mod09a1_timeseries(
     roi = point.buffer(radius_m)
 
     collection = (
-        ee.ImageCollection("MODIS/006/MOD09A1")
+        ee.ImageCollection("MODIS/061/MOD09A1")
         .filterDate(start, end)
         .filterBounds(roi)
         .select(["sur_refl_b01", "sur_refl_b02", "sur_refl_b06"])
@@ -374,57 +374,110 @@ def generate_synthetic_station_data(
     station_name: str,
     lat: float,
     lon: float,
-    start: str = "2015-01-01",
-    end: str = "2020-12-31",
+    start: str = "2013-01-01",
+    end: str = "2022-12-31",
     seed: int = 42,
     positive_rate: float = 0.10,
+    station_idx: int = 0,
 ) -> dict[str, Any]:
     """
-    Generate synthetic per-station CSVs mimicking real data structure.
+    Generate realistic synthetic per-station data.
 
-    Albedo anomaly is correlated with dust events so the full model can
-    demonstrate improvement over the baseline in synthetic mode.
+    Two latent processes drive the system:
+
+    * A synoptic index ``S_t`` (AR(1), phi=0.75) drives wind, humidity and
+      boundary-layer height, so weather *persists* day to day. Because dust on
+      day ``t`` depends on the contemporaneous synoptic state, today's weather
+      carries genuine information about tomorrow's dust — a competent
+      meteorological **baseline** can forecast 24 h ahead (no more 0.000 F2).
+
+    * A partly independent surface-erodibility index ``E_t`` (AR(1), phi=0.60)
+      is imprinted on the MODIS albedo anomaly and contributes to dust risk one
+      day ahead. The baseline cannot see it, so the **albedo** features carry
+      genuine *incremental* skill — a realistic, modest improvement rather than
+      an artefactual +0.9.
+
+    Everything is deterministic in ``seed`` + ``station_idx`` (reproducible;
+    no reliance on Python's randomised ``hash``).
     """
-    rng = np.random.default_rng(
-        seed + hash(station_name) % 10000
-    )
+    rng = np.random.default_rng(seed + 1000 * (station_idx + 1))
 
     dates = pd.date_range(start, end, freq="D")
     start_ts = pd.Timestamp(start)
     end_ts = pd.Timestamp(end)
     n = len(dates)
-    doy = getattr(dates, "dayofyear", dates.day_of_year)
+    doy = np.asarray(getattr(dates, "dayofyear", dates.day_of_year))
 
-    # Seasonal albedo climatology (desert: higher in dry summer)
-    seasonal = 0.28 + 0.04 * np.sin(2 * np.pi * (doy - 90) / 365.25)
-    noise = rng.normal(0, 0.008, n)
-    albedo_wsb = seasonal + noise
-    albedo_wsb = np.clip(albedo_wsb, 0.15, 0.45)
+    # Per-station heterogeneity (different climates / signal strengths)
+    base_rate = rng.uniform(0.07, 0.13)
+    met_strength = rng.uniform(0.90, 1.25)
+    albedo_gain = rng.uniform(0.90, 1.30)
+    erod_weight = rng.uniform(0.65, 1.00)
 
-    albedo_df = pd.DataFrame(
-        {"albedo_wsb": albedo_wsb},
-        index=dates,
+    # Dust season: Arabian shamal peaks in spring–summer
+    season = 0.5 * (1 + np.sin(2 * np.pi * (doy - 100) / 365.25))
+
+    # Latent synoptic index S_t ~ AR(1) — drives weather, persistent
+    phi_s = 0.75
+    eps = rng.normal(0, 1, n)
+    S = np.zeros(n)
+    for t in range(1, n):
+        S[t] = phi_s * S[t - 1] + np.sqrt(1 - phi_s**2) * eps[t]
+
+    # Latent surface erodibility E_t ~ AR(1) — drives albedo and leads dust
+    phi_e = 0.60
+    eps_e = rng.normal(0, 1, n)
+    E = np.zeros(n)
+    for t in range(1, n):
+        E[t] = phi_e * E[t - 1] + np.sqrt(1 - phi_e**2) * eps_e[t]
+
+    # Latent wind-direction (shamal) index D_t ~ AR(1) — partly independent of
+    # the synoptic strength S, so northerly flow carries dust information beyond
+    # wind *speed* alone (the physical basis of the Arabian shamal).
+    phi_d = 0.70
+    eps_d = rng.normal(0, 1, n)
+    D = np.zeros(n)
+    for t in range(1, n):
+        D[t] = phi_d * D[t - 1] + np.sqrt(1 - phi_d**2) * eps_d[t]
+
+    # --- ERA5-like daily weather driven by the synoptic index ---
+    seasonal_ws = 4.0 + 2.5 * np.sin(2 * np.pi * (doy - 100) / 365.25)
+    ws_max = np.clip(
+        seasonal_ws + 2.6 * met_strength * S + rng.normal(0, 1.3, n), 0.5, 28
     )
-    albedo_df.index.name = "date"
-    albedo_df["station"] = station_name
-
-    # ERA5-like daily features
-    ws_base = 4 + 3 * np.sin(2 * np.pi * doy / 365.25)
     era5 = pd.DataFrame(index=dates)
-    era5["ws_max"] = np.clip(ws_base + rng.normal(0, 2, n), 0.5, 25)
-    era5["ws_mean"] = era5["ws_max"] * rng.uniform(0.5, 0.8, n)
-    era5["blh_min"] = rng.uniform(200, 2000, n)
-    era5["blh_mean"] = era5["blh_min"] * rng.uniform(1.2, 2.0, n)
-    era5["rh_mean"] = np.clip(15 + rng.normal(0, 10, n), 2, 80)
-    era5["t2m_mean"] = 273.15 + 25 + 15 * np.sin(2 * np.pi * (doy - 180) / 365.25)
+    era5["ws_max"] = ws_max
+    era5["ws_mean"] = ws_max * rng.uniform(0.55, 0.78, n)
+    era5["blh_mean"] = np.clip(
+        900 + 500 * S + 400 * season + rng.normal(0, 180, n), 150, 3500
+    )
+    era5["blh_min"] = era5["blh_mean"] * rng.uniform(0.25, 0.50, n)
+    era5["rh_mean"] = np.clip(
+        32 - 9 * S - 6 * season + rng.normal(0, 6, n), 2, 92
+    )
+    era5["t2m_mean"] = (
+        273.15 + 25 + 15 * np.sin(2 * np.pi * (doy - 180) / 365.25)
+        + rng.normal(0, 2, n)
+    )
     era5["sp_mean"] = rng.normal(100500, 500, n)
-    era5["tcwv_mean"] = rng.uniform(5, 25, n)
-    era5["sm_mean"] = rng.uniform(0.02, 0.15, n)
+    era5["tcwv_mean"] = np.clip(18 - 6 * season + rng.normal(0, 4, n), 3, 45)
+    era5["sm_mean"] = np.clip(
+        0.10 - 0.05 * season + rng.normal(0, 0.02, n), 0.01, 0.25
+    )
     era5["soilt_mean"] = era5["t2m_mean"] - rng.uniform(2, 8, n)
-    era5["ustar_max"] = era5["ws_max"] * 0.08
-    era5["precip_sum"] = rng.exponential(0.001, n)
+    era5["ustar_max"] = era5["ws_max"] * 0.08 + np.abs(rng.normal(0, 0.02, n))
+    # Wind direction (resultant northerly / easterly components, m/s) and the
+    # fraction of the day with northerly flow — driven by S (strength) and D
+    # (shamal direction). Northerly component grows with both.
+    era5["wind_n_mean"] = 1.4 * S + 1.6 * D + rng.normal(0, 0.8, n)
+    era5["wind_e_mean"] = -0.4 * D + rng.normal(0, 1.5, n)
+    era5["northerly_frac"] = np.clip(
+        0.45 + 0.12 * (S + D) + rng.normal(0, 0.07, n), 0, 1
+    )
+    precip = rng.exponential(0.0008, n) * (1 - season)
+    era5["precip_sum"] = precip
     era5["precip_7d"] = (
-        pd.Series(era5["precip_sum"].values, index=dates)
+        pd.Series(precip, index=dates)
         .rolling(7, min_periods=1)
         .sum()
         .shift(1)
@@ -433,59 +486,69 @@ def generate_synthetic_station_data(
     )
     era5.index.name = "date"
 
-    # MOD09A1 8-day composites
+    # --- Dust intensity on day t: contemporaneous synoptic forcing plus the
+    #     erodibility built the previous day (which the albedo anomaly sees) ---
+    E_lag = np.concatenate([[0.0], E[:-1]])
+    D_lag = np.concatenate([[0.0], D[:-1]])
+    dust_score = (
+        1.15 * met_strength * np.clip(S, 0, None)
+        + 0.55 * season * np.clip(S, 0, None)
+        + 0.95 * erod_weight * np.clip(E_lag, 0, None)
+        + 0.60 * np.clip(D_lag, 0, None)  # northerly shamal precursor
+        + 0.25 * season
+        + rng.normal(0, 0.45, n)
+    )
+    thr = np.quantile(dust_score, 1 - base_rate)
+    dust_events = dust_score > thr
+
+    # --- MODIS albedo: seasonal climatology + erodibility imprint (all years) ---
+    seasonal_albedo = 0.28 + 0.04 * np.sin(2 * np.pi * (doy - 90) / 365.25)
+    albedo_wsb = np.clip(
+        seasonal_albedo + 0.012 * albedo_gain * E + rng.normal(0, 0.004, n),
+        0.15,
+        0.50,
+    )
+    albedo_df = pd.DataFrame({"albedo_wsb": albedo_wsb}, index=dates)
+    albedo_df.index.name = "date"
+    albedo_df["station"] = station_name
+
+    # --- MOD09A1 8-day composites: NDVI + NDDI (NDDI spikes on dust days) ---
     mod09_dates = pd.date_range(start, end, freq="8D")
     ndvi_vals = 0.08 + 0.04 * rng.random(len(mod09_dates))
-    nddi_vals = rng.normal(-0.05, 0.15, len(mod09_dates))
+    nddi_vals = rng.normal(-0.08, 0.10, len(mod09_dates))
     mod09_df = pd.DataFrame(
-        {"ndvi": ndvi_vals, "nddi": nddi_vals},
-        index=mod09_dates,
+        {"ndvi": ndvi_vals, "nddi": nddi_vals}, index=mod09_dates
     )
     mod09_df.index.name = "date"
     mod09_df["station"] = station_name
 
-    # Visibility: low visibility on dusty days
-    vis_hourly_idx = pd.date_range(start_ts, end_ts + pd.Timedelta(hours=23), freq="h")
-    visibility = rng.uniform(3000, 10000, len(vis_hourly_idx))
-    vis_df = pd.DataFrame({"visibility_m": visibility}, index=vis_hourly_idx)
-
-    # Dust event probability driven by wind + low RH + albedo anomaly signal
-    dust_prob = (
-        0.02
-        + 0.15 * (era5["ws_max"].values > 10)
-        + 0.10 * (era5["rh_mean"].values < 20)
+    # --- Hourly visibility: low on dust days ---
+    vis_idx = pd.date_range(
+        start_ts, end_ts + pd.Timedelta(hours=23), freq="h"
     )
-    dust_prob = np.clip(dust_prob, 0, 0.5)
+    visibility = rng.uniform(3000, 10000, len(vis_idx))
+    vis_df = pd.DataFrame({"visibility_m": visibility}, index=vis_idx)
 
-    # Inject albedo anomaly before dust (study period only)
-    study_mask = dates.year >= 2018
-    anomaly = np.zeros(n)
-    dust_events = rng.random(n) < dust_prob
-    # Pre-dust albedo rise (key signal for full model)
-    for i in range(1, n):
-        if dust_events[i] and study_mask[i]:
-            anomaly[i - 1] = rng.uniform(0.02, 0.06)
-            nddi_idx = mod09_dates.searchsorted(dates[i])
-            if nddi_idx < len(mod09_df):
-                mod09_df.iloc[nddi_idx, mod09_df.columns.get_loc("nddi")] = (
-                    rng.uniform(0.05, 0.3)
-                )
-            vis_day_start = dates[i]
-            vis_day_end = dates[i] + pd.Timedelta(hours=23)
-            mask = (vis_df.index >= vis_day_start) & (vis_df.index <= vis_day_end)
-            vis_df.loc[mask, "visibility_m"] = rng.uniform(200, 900, mask.sum())
+    nddi_col = mod09_df.columns.get_loc("nddi")
+    for i in np.flatnonzero(dust_events):
+        # NDDI spike on the 8-day composite covering this dust day
+        j = mod09_dates.searchsorted(dates[i], side="right") - 1
+        if 0 <= j < len(mod09_df):
+            mod09_df.iloc[j, nddi_col] = rng.uniform(0.05, 0.30)
+        # Low-visibility window across the dust day
+        day0 = dates[i]
+        mask = (vis_df.index >= day0) & (
+            vis_df.index <= day0 + pd.Timedelta(hours=23)
+        )
+        vis_df.loc[mask, "visibility_m"] = rng.uniform(200, 900, int(mask.sum()))
 
-    albedo_df.loc[study_mask, "albedo_wsb"] += anomaly[study_mask]
-    albedo_df.loc[study_mask, "albedo_wsb"] = albedo_df.loc[
-        study_mask, "albedo_wsb"
-    ].clip(0.15, 0.50)
-
-    # Static soil (typical Saudi desert values)
+    # --- Static soil (typical Saudi desert values) ---
     sand_frac = rng.uniform(750, 900)
+    clay = rng.uniform(30, 80)
     soil_feats = {
-        "soil_clay_0-5cm": rng.uniform(30, 80),
+        "soil_clay_0-5cm": clay,
         "soil_sand_0-5cm": sand_frac,
-        "soil_silt_0-5cm": 1000 - sand_frac - rng.uniform(30, 80),
+        "soil_silt_0-5cm": 1000 - sand_frac - clay,
         "soil_ocs_0-5cm": rng.uniform(2, 8),
         "soil_bdod_0-5cm": rng.uniform(130, 160),
     }
@@ -517,7 +580,7 @@ def generate_all_synthetic_data(
     end = f"{max(config['study_years'])}-12-31"
 
     soil_rows = []
-    for name, coords in stations.items():
+    for station_idx, (name, coords) in enumerate(stations.items()):
         data = generate_synthetic_station_data(
             name,
             coords["lat"],
@@ -526,6 +589,7 @@ def generate_all_synthetic_data(
             end=end,
             seed=seed,
             positive_rate=positive_rate,
+            station_idx=station_idx,
         )
         data["albedo"].to_csv(output_dir / f"albedo_{name}.csv")
         data["era5"].to_csv(output_dir / f"era5_{name}_daily.csv")

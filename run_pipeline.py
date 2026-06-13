@@ -27,9 +27,16 @@ from src.evaluation import (  # noqa: E402
     evaluate_both_models,
     full_statistical_analysis,
     plot_feature_importance,
+    run_group_ablation,
     write_report,
 )
-from src.features import FULL_FEATURES, compute_albedo_anomaly  # noqa: E402
+from src.features import (  # noqa: E402
+    BASELINE_FEATURES,
+    FULL_FEATURES,
+    REAL_BASELINE_FEATURES,
+    REAL_FULL_FEATURES,
+    compute_albedo_anomaly,
+)
 from src.labeling import build_full_dataset, build_master_dataframe  # noqa: E402
 from src.models import tune_xgboost  # noqa: E402
 
@@ -81,144 +88,88 @@ def build_dataset_from_synthetic(config: dict) -> "pd.DataFrame":
     return master
 
 
-def build_dataset_from_real(config: dict) -> "pd.DataFrame":
+def build_dataset_from_real(config: dict, args: argparse.Namespace) -> "pd.DataFrame":
     """
-    Acquire real data from NOAA ISD, GEE, CDS, SoilGrids.
+    Acquire real data from keyless public APIs and assemble the master dataset.
 
-    Requires:
-      - earthengine authenticate (ee.Authenticate())
-      - ~/.cdsapirc for ERA5
-      - pip install isd earthengine-api cdsapi
+    Sources (no account / key / OAuth required):
+      - Meteorology : Open-Meteo Historical Weather API (ERA5 reanalysis)
+      - Satellite   : ORNL DAAC MODIS MOD09A1 -> NDVI, NDDI, Liang albedo
+      - Visibility  : NOAA ISD global-hourly CSV archive
+      - Soil        : ISRIC SoilGrids v2 REST
+
+    All downloads are cached under data/raw/real so re-runs are incremental.
     """
-    from src.acquisition import (
-        build_soil_dataframe,
-        daily_visibility_flag,
-        download_era5,
-        download_isd_visibility,
-        era5_to_daily_features,
-        get_albedo_timeseries,
-        get_mod09a1_timeseries,
+    from src.features import REAL_FULL_FEATURES
+    from src.real_sources import fetch_station_real_data
+
+    real_cfg = config.get("real", {})
+    stations_all = config["stations"]
+
+    station_names = args.stations or real_cfg.get("stations", list(stations_all))
+    study_years = args.study_years or real_cfg.get("study_years", [2020])
+    modis_years = args.modis_years or real_cfg.get("modis_years", study_years)
+    modis_years = sorted(set(modis_years) | set(study_years))
+    albedo_km = args.albedo_km or real_cfg.get("albedo_km", 20)
+    baseline_years = [y for y in modis_years if y not in study_years] or modis_years
+
+    cache_dir = Path(config["paths"]["data_raw"]) / "real"
+
+    print(
+        f"Real-data scope: stations={station_names}  study={study_years}  "
+        f"modis={modis_years}  albedo_km=+/-{albedo_km}"
     )
 
-    stations = config["stations"]
-    raw_dir = Path(config["paths"]["data_raw"])
-    raw_dir.mkdir(parents=True, exist_ok=True)
-
-    # Soil (cached)
-    soil_path = raw_dir / "soil_properties.csv"
-    if soil_path.exists():
-        import pandas as pd
-
-        soil_df = pd.read_csv(soil_path, index_col="station")
-    else:
-        print("Fetching SoilGrids properties...")
-        soil_df = build_soil_dataframe(stations, config["soil_properties"])
-        soil_df.to_csv(soil_path)
-
     station_dfs = []
-    study_years = config["study_years"]
-    baseline_start = f"{min(config['baseline_years'])}-01-01"
-    study_end = config["project"]["study_end"]
-
-    for name, coords in stations.items():
-        print(f"\n--- {name} ---")
-
-        # Visibility
-        vis_parts = []
-        for year in study_years:
-            vis_path = raw_dir / f"vis_{name}_{year}.csv"
-            if vis_path.exists():
-                import pandas as pd
-
-                vis_parts.append(
-                    pd.read_csv(vis_path, index_col=0, parse_dates=True)
-                )
-            else:
-                print(f"  Downloading ISD visibility {year}...")
-                vis = download_isd_visibility(
-                    coords["wmo_id"], coords["wban"], year
-                )
-                vis.to_csv(vis_path)
-                vis_parts.append(vis)
-        import pandas as pd
-
-        vis_all = pd.concat(vis_parts).sort_index()
-        vis_flag = daily_visibility_flag(
-            vis_all, config["project"]["visibility_threshold_m"]
+    for name in station_names:
+        coords = stations_all[name]
+        isd_id = {"usaf": coords["isd_usaf"], "wban": coords["isd_wban"]}
+        bundle = fetch_station_real_data(
+            name,
+            coords,
+            isd_id,
+            study_years=study_years,
+            modis_years=modis_years,
+            soil_properties=config["soil_properties"],
+            albedo_km=albedo_km,
+            cache_dir=cache_dir,
         )
 
-        # ERA5
-        era5_nc = raw_dir / f"era5_{name}.nc"
-        era5_csv = raw_dir / f"era5_{name}_daily.csv"
-        if era5_csv.exists():
-            era5_df = pd.read_csv(era5_csv, index_col="date", parse_dates=True)
-        else:
-            if not era5_nc.exists():
-                print("  Downloading ERA5 (this may take a while)...")
-                download_era5(
-                    coords["lat"],
-                    coords["lon"],
-                    study_years,
-                    era5_nc,
-                    config["era5_variables"],
-                )
-            era5_df = era5_to_daily_features(era5_nc, coords["lat"], coords["lon"])
-            era5_df.to_csv(era5_csv)
-
-        # Albedo
-        alb_path = raw_dir / f"albedo_{name}.csv"
-        if alb_path.exists():
-            albedo_raw = pd.read_csv(alb_path, index_col="date", parse_dates=True)
-        else:
-            print("  Extracting MCD43A3 albedo from GEE...")
-            albedo_raw = get_albedo_timeseries(
-                name,
-                stations,
-                radius_m=config["project"]["albedo_radius_m"],
-                start=baseline_start,
-                end=study_end,
-            )
-            albedo_raw.to_csv(alb_path)
-
         albedo_anom = compute_albedo_anomaly(
-            albedo_raw,
-            baseline_years=config["baseline_years"],
-            study_years=config["study_years"],
+            bundle["albedo"],
+            baseline_years=baseline_years,
+            study_years=study_years,
             doy_window=config["project"]["albedo_doy_window"],
         )
 
-        # MOD09A1
-        mod_path = raw_dir / f"mod09a1_{name}.csv"
-        if mod_path.exists():
-            mod09 = pd.read_csv(mod_path, index_col="date", parse_dates=True)
-        else:
-            print("  Extracting MOD09A1 NDVI/NDDI from GEE...")
-            mod09 = get_mod09a1_timeseries(
-                name,
-                stations,
-                radius_m=config["project"]["albedo_radius_m"],
-                start=config["project"]["study_start"],
-                end=study_end,
-            )
-            mod09.to_csv(mod_path)
-
-        soil_feats = soil_df.loc[name].to_dict()
         station_df = build_master_dataframe(
             name,
-            era5_df,
+            bundle["era5"],
             albedo_anom,
-            mod09,
-            vis_flag,
-            soil_feats,
+            bundle["mod09"],
+            bundle["vis_flag"],
+            bundle["soil_feats"],
             study_start=str(min(study_years)),
             study_end=str(max(study_years)),
+            label_mode="visibility",
         )
         station_dfs.append(station_df)
+        print(
+            f"  {name}: {len(station_df)} rows, "
+            f"{int(station_df['dust_event_next_day'].sum())} dust events"
+        )
 
     master = build_full_dataset(station_dfs)
-    final_path = Path(config["paths"]["data_final"]) / "master_dataset.csv"
+    # Keep only real features that were actually produced (guards optional cols).
+    present = [c for c in REAL_FULL_FEATURES if c in master.columns]
+    missing = [c for c in REAL_FULL_FEATURES if c not in master.columns]
+    if missing:
+        print(f"  Note: {len(missing)} real features unavailable: {missing}")
+
+    final_path = Path(config["paths"]["data_final"]) / "master_dataset_real.csv"
     final_path.parent.mkdir(parents=True, exist_ok=True)
     master.to_csv(final_path, index=False)
+    print(f"Real master dataset saved: {final_path} ({len(master)} rows)")
     return master
 
 
@@ -247,6 +198,32 @@ def main() -> None:
         action="store_true",
         help="Also run leave-one-station-out GroupKFold CV",
     )
+    parser.add_argument(
+        "--stations",
+        nargs="+",
+        default=None,
+        help="Subset of station names (real mode); overrides config real.stations",
+    )
+    parser.add_argument(
+        "--study-years",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Study years for real mode (e.g. --study-years 2019 2020)",
+    )
+    parser.add_argument(
+        "--modis-years",
+        nargs="+",
+        type=int,
+        default=None,
+        help="MODIS years for real mode (extra years form the albedo baseline)",
+    )
+    parser.add_argument(
+        "--albedo-km",
+        type=int,
+        default=None,
+        help="+/- box half-width (km) for the MODIS spatial mean (real mode)",
+    )
     args = parser.parse_args()
 
     config_path = PROJECT_ROOT / args.config
@@ -265,12 +242,25 @@ def main() -> None:
     print("\n[1/4] Building master dataset...")
     if mode == "synthetic":
         df = build_dataset_from_synthetic(config)
+        baseline_features = BASELINE_FEATURES
+        full_features = FULL_FEATURES
+        n_splits = config["model"]["n_cv_splits"]
+        output_dir = PROJECT_ROOT / config["paths"]["outputs"]
+        report_path = PROJECT_ROOT / config["paths"]["results"] / "report.md"
+        dataset_name = "master_dataset.csv"
     else:
-        df = build_dataset_from_real(config)
+        df = build_dataset_from_real(config, args)
+        # Use only the real features that were actually produced.
+        baseline_features = [c for c in REAL_BASELINE_FEATURES if c in df.columns]
+        full_features = [c for c in REAL_FULL_FEATURES if c in df.columns]
+        n_splits = config.get("real", {}).get(
+            "n_cv_splits", config["model"]["n_cv_splits"]
+        )
+        output_dir = PROJECT_ROOT / config["paths"]["outputs"] / "real"
+        report_path = PROJECT_ROOT / config["paths"]["results"] / "report_real.md"
+        dataset_name = "master_dataset_real.csv"
 
-    n_splits = config["model"]["n_cv_splits"]
     random_state = config["model"]["random_state"]
-    output_dir = PROJECT_ROOT / config["paths"]["outputs"]
     results_dir = PROJECT_ROOT / config["paths"]["results"]
 
     xgb_params = None
@@ -278,7 +268,7 @@ def main() -> None:
         print("\n[Optuna] Tuning hyperparameters on full feature set...")
         xgb_params = tune_xgboost(
             df,
-            FULL_FEATURES,
+            full_features,
             n_trials=config["model"]["optuna_trials"],
             random_state=random_state,
         )
@@ -292,19 +282,20 @@ def main() -> None:
         output_dir=output_dir,
         xgb_params=xgb_params,
         random_state=random_state,
+        baseline_features=baseline_features,
+        full_features=full_features,
     )
 
     if args.station_cv:
-        from src.features import BASELINE_FEATURES
         from src.models import run_cross_validation
 
         print("\n[Optional] Leave-one-station-out CV (baseline)...")
         run_cross_validation(
-            df, BASELINE_FEATURES, cv_strategy="station", random_state=random_state
+            df, baseline_features, cv_strategy="station", random_state=random_state
         )
         print("\n[Optional] Leave-one-station-out CV (full)...")
         run_cross_validation(
-            df, FULL_FEATURES, cv_strategy="station", random_state=random_state
+            df, full_features, cv_strategy="station", random_state=random_state
         )
 
     # --- Step 3: Statistical comparison ---
@@ -318,11 +309,23 @@ def main() -> None:
         output_dir=output_dir,
     )
 
-    # --- Step 4: Feature importance ---
-    print("\n[4/4] SHAP feature importance (full model)...")
+    # --- Step 4: Driver ablation (what actually matters) ---
+    print("\n[4/5] Driver ablation (incremental PR-AUC by group)...")
+    ablation_df = run_group_ablation(
+        df,
+        full_features,
+        n_splits=n_splits,
+        xgb_params=xgb_params,
+        random_state=random_state,
+        n_bootstrap=2000,
+        output_dir=output_dir,
+    )
+
+    # --- Step 5: Feature importance ---
+    print("\n[5/5] SHAP feature importance (full model)...")
     plot_feature_importance(
         df,
-        FULL_FEATURES,
+        full_features,
         output_dir=output_dir,
         random_state=random_state,
     )
@@ -332,15 +335,16 @@ def main() -> None:
         baseline_results,
         full_results,
         df,
-        output_path=results_dir / "report.md",
+        output_path=report_path,
         data_mode=mode,
+        ablation_df=ablation_df,
     )
 
     print("\n" + "=" * 60)
     print("PIPELINE COMPLETE")
-    print(f"  Dataset:  {config['paths']['data_final']}/master_dataset.csv")
-    print(f"  Figures:  {config['paths']['outputs']}/")
-    print(f"  Report:   {config['paths']['results']}/report.md")
+    print(f"  Dataset:  {config['paths']['data_final']}/{dataset_name}")
+    print(f"  Figures:  {output_dir}/")
+    print(f"  Report:   {report_path}")
     print("=" * 60)
 
 
