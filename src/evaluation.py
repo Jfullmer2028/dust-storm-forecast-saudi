@@ -395,7 +395,7 @@ def write_report(
             f"| **Mean** | **{baseline_results['mean_f2']:.4f}** |",
             f"| Std | {baseline_results['std_f2']:.4f} |",
             "",
-            "### Full Model (+ MODIS albedo anomaly within 200 km)",
+            "### Full Model (+ MODIS shortwave albedo anomaly)",
             "",
             "| Fold | F2-score |",
             "|------|----------|",
@@ -481,10 +481,10 @@ def write_report(
 
     if stats["delta_mean_f2"] > 0 and b["lo"] > 0:
         lines.append(
-            "Adding dynamic MODIS shortwave broadband albedo anomaly features "
-            "(within 200 km of each station) improves 24-hour dust-storm onset "
-            "prediction F2-score relative to the baseline meteorological model. "
-            "Both the mean CV improvement and bootstrap 95% CI support this finding."
+            "Adding the MODIS shortwave broadband albedo anomaly features "
+            "improves 24-hour dust-storm onset prediction F2-score relative to "
+            "the baseline meteorological model. Both the mean CV improvement and "
+            "the bootstrap 95% CI (entirely above zero) support this finding."
         )
     elif stats["delta_mean_f2"] > 0:
         lines.append(

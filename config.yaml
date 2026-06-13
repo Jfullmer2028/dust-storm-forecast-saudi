@@ -119,9 +119,9 @@ soil_properties:
 # / --modis-years / --albedo-km. Defaults give a tractable, genuinely-real run.
 real:
   stations: [riyadh, hafar, sharurah]
-  study_years: [2020]
-  modis_years: [2019, 2020]   # extra year(s) form the albedo anomaly baseline
-  albedo_km: 20               # +/- box half-width for the MODIS spatial mean
+  study_years: [2018, 2019, 2020]
+  modis_years: [2017, 2018, 2019, 2020]  # 2017 forms the albedo anomaly baseline
+  albedo_km: 20                          # +/- box half-width for the MODIS mean
   n_cv_splits: 5
 
 synthetic:

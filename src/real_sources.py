@@ -210,6 +210,13 @@ def _ornl_band_mean(
     return float(np.nanmean(arr)) if np.isfinite(arr).any() else float("nan")
 
 
+# Bands actually needed downstream: NDVI (b01,b02) + Liang albedo (b01-b05,b07).
+# b06 (needed only for the unstable NDDI, unused in the real label) is skipped
+# to cut one ORNL request per composite date.
+ALBEDO_NDVI_BANDS = ["sur_refl_b01", "sur_refl_b02", "sur_refl_b03",
+                     "sur_refl_b04", "sur_refl_b05", "sur_refl_b07"]
+
+
 def fetch_mod09a1_indices(
     lat: float,
     lon: float,
@@ -218,13 +225,16 @@ def fetch_mod09a1_indices(
     km: int = 20,
     sleep_s: float = 0.15,
     progress: bool = True,
+    bands: list[str] | None = None,
 ) -> pd.DataFrame:
     """
-    Build an 8-day MODIS frame with NDVI, NDDI and Liang shortwave albedo.
+    Build an 8-day MODIS frame with NDVI and the Liang shortwave albedo
+    (and NDDI when band 6 is included).
 
     One reflectance band requires one ORNL request, so each composite date
-    costs seven requests; results are returned per available composite date.
+    costs ``len(bands)`` requests; results are returned per available date.
     """
+    bands = bands or ALBEDO_NDVI_BANDS
     dates = _ornl_dates(lat, lon)
     sel = dates[
         (dates["calendar_date"] >= pd.Timestamp(start))
@@ -233,7 +243,7 @@ def fetch_mod09a1_indices(
     rows = []
     for k, (_, d) in enumerate(sel.iterrows()):
         rec: dict[str, Any] = {"date": d["calendar_date"]}
-        for band in MOD09A1_BANDS:
+        for band in bands:
             rec[band] = _ornl_band_mean(
                 lat, lon, band, d["modis_date"], km, "MOD09A1"
             )
@@ -243,10 +253,16 @@ def fetch_mod09a1_indices(
             print(f"    [MODIS] {d['calendar_date'].date()} ({k + 1}/{len(sel)})")
     df = pd.DataFrame(rows).set_index("date").sort_index()
 
-    red, nir, swir = df["sur_refl_b01"], df["sur_refl_b02"], df["sur_refl_b06"]
-    df["ndvi"] = (nir - red) / (nir + red)
-    ndwi = (nir - swir) / (nir + swir)
-    df["nddi"] = (df["ndvi"] - ndwi) / (df["ndvi"] + ndwi)
+    df["ndvi"] = (df["sur_refl_b02"] - df["sur_refl_b01"]) / (
+        df["sur_refl_b02"] + df["sur_refl_b01"]
+    )
+    if "sur_refl_b06" in df.columns:
+        ndwi = (df["sur_refl_b02"] - df["sur_refl_b06"]) / (
+            df["sur_refl_b02"] + df["sur_refl_b06"]
+        )
+        df["nddi"] = (df["ndvi"] - ndwi) / (df["ndvi"] + ndwi)
+    else:
+        df["nddi"] = np.nan
     df["albedo_wsb"] = LIANG_INTERCEPT + sum(
         coeff * df[band] for band, coeff in LIANG_COEFFS.items()
     )
@@ -278,18 +294,21 @@ def fetch_station_real_data(
     cache.mkdir(parents=True, exist_ok=True)
     lat, lon = coords["lat"], coords["lon"]
 
-    # --- MODIS (the expensive part) — cache per station ---
-    modis_path = cache / f"modis_{station_name}.csv"
+    my0, my1 = min(modis_years), max(modis_years)
+    sy0, sy1 = min(study_years), max(study_years)
+
+    # --- MODIS (the expensive part) — cache keyed by year range + box size ---
+    modis_path = cache / f"modis_{station_name}_{my0}-{my1}_km{albedo_km}.csv"
     if modis_path.exists():
         modis = pd.read_csv(modis_path, index_col="date", parse_dates=True)
         print(f"  [{station_name}] MODIS from cache ({len(modis)} composites)")
     else:
-        print(f"  [{station_name}] fetching MODIS {min(modis_years)}-{max(modis_years)}...")
+        print(f"  [{station_name}] fetching MODIS {my0}-{my1} (+/-{albedo_km}km)...")
         modis = fetch_mod09a1_indices(
             lat,
             lon,
-            start=f"{min(modis_years)}-01-01",
-            end=f"{max(modis_years)}-12-31",
+            start=f"{my0}-01-01",
+            end=f"{my1}-12-31",
             km=albedo_km,
         )
         modis.to_csv(modis_path)
@@ -302,8 +321,8 @@ def fetch_station_real_data(
     albedo_daily.index.name = "date"
     albedo_daily["station"] = station_name
 
-    # --- Meteorology — cache per station ---
-    era5_path = cache / f"era5_{station_name}.csv"
+    # --- Meteorology — cache per station + study range ---
+    era5_path = cache / f"era5_{station_name}_{sy0}-{sy1}.csv"
     if era5_path.exists():
         era5 = pd.read_csv(era5_path, index_col="date", parse_dates=True)
         print(f"  [{station_name}] meteorology from cache ({len(era5)} days)")
@@ -314,8 +333,8 @@ def fetch_station_real_data(
         )
         era5.to_csv(era5_path)
 
-    # --- Visibility — cache per station ---
-    vis_path = cache / f"vis_{station_name}.csv"
+    # --- Visibility — cache per station + study range ---
+    vis_path = cache / f"vis_{station_name}_{sy0}-{sy1}.csv"
     if vis_path.exists():
         vis_flag = pd.read_csv(
             vis_path, index_col=0, parse_dates=True
