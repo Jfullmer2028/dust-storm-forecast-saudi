@@ -84,6 +84,7 @@ OPEN_METEO_HOURLY = [
     "surface_pressure",
     "wind_speed_10m",
     "wind_gusts_10m",
+    "wind_direction_10m",
     "precipitation",
     "soil_temperature_0_to_7cm",
     "soil_moisture_0_to_7cm",
@@ -109,10 +110,25 @@ def fetch_openmeteo_daily(lat: float, lon: float, start: str, end: str) -> pd.Da
         {c: "float64" for c in OPEN_METEO_HOURLY}
     )
 
+    # Decompose wind into directional components. Meteorological direction is
+    # the bearing the wind blows FROM; the unit "from" vector has northerly
+    # component cos(dir) (+1 from N) and easterly component sin(dir) (+1 from E),
+    # scaled by speed. A high wind_n_mean is the NW shamal that drives Arabian
+    # dust. northerly_frac is the share of the day with flow from the N quadrant.
+    dir_rad = np.deg2rad(df["wind_direction_10m"])
+    df["_wind_n"] = np.cos(dir_rad) * df["wind_speed_10m"]
+    df["_wind_e"] = np.sin(dir_rad) * df["wind_speed_10m"]
+    df["_northerly"] = (
+        (df["wind_direction_10m"] >= 300) | (df["wind_direction_10m"] <= 60)
+    ).astype("float64")
+
     agg = df.resample("D").agg(
         ws_max=("wind_speed_10m", "max"),
         ws_mean=("wind_speed_10m", "mean"),
         gust_max=("wind_gusts_10m", "max"),
+        wind_n_mean=("_wind_n", "mean"),
+        wind_e_mean=("_wind_e", "mean"),
+        northerly_frac=("_northerly", "mean"),
         rh_mean=("relative_humidity_2m", "mean"),
         rh_min=("relative_humidity_2m", "min"),
         t2m_mean=("temperature_2m", "mean"),

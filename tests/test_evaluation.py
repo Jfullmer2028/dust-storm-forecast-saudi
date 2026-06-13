@@ -1,11 +1,13 @@
 """Tests for evaluation: per-station F2, Wilcoxon test, bootstrap CI."""
 
 import numpy as np
+import pandas as pd
 
 from src.evaluation import (
     bootstrap_auc_ci,
     bootstrap_f2_ci,
     per_station_f2,
+    run_group_ablation,
     wilcoxon_test,
 )
 
@@ -70,6 +72,40 @@ class TestBootstrapAUC:
         out = bootstrap_auc_ci(y_true, proba, proba, metric="roc", n_bootstrap=200)
         assert out["metric"] == "ROC-AUC"
         assert abs(out["delta"]) < 1e-9  # identical inputs -> zero delta
+
+
+class TestDriverAblation:
+    def test_informative_group_ranks_above_noise(self, tmp_path):
+        """The group that drives the label must show the largest incremental PR-AUC."""
+        rng = np.random.default_rng(0)
+        n = 1500
+        dates = pd.date_range("2018-01-01", periods=n // 3, freq="D")
+        # ws_max carries the signal; soil_clay_0-5cm is pure noise.
+        rows = []
+        for st in ["a", "b", "c"]:
+            signal = rng.normal(0, 1, len(dates))
+            y = (signal + rng.normal(0, 0.5, len(dates)) > 1.0).astype(int)
+            rows.append(
+                pd.DataFrame({
+                    "date": dates,
+                    "station": st,
+                    "ws_max": signal,
+                    "rh_mean": rng.normal(0, 1, len(dates)),
+                    "soil_clay_0-5cm": rng.normal(0, 1, len(dates)),
+                    "dust_event_next_day": y,
+                })
+            )
+        df = pd.concat(rows, ignore_index=True)
+        feats = ["ws_max", "rh_mean", "soil_clay_0-5cm"]
+        table = run_group_ablation(
+            df, feats, n_splits=3, xgb_params={"n_estimators": 60},
+            n_bootstrap=300, output_dir=tmp_path,
+        )
+        assert set(table["group"]) == {"wind_speed", "humidity_dryness", "soil_texture"}
+        wind = table.set_index("group").loc["wind_speed", "incremental_pr_auc"]
+        soil = table.set_index("group").loc["soil_texture", "incremental_pr_auc"]
+        assert wind > soil  # the true driver contributes more than noise
+        assert (tmp_path / "driver_ablation.png").exists()
 
 
 class TestWilcoxon:

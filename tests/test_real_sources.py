@@ -34,6 +34,7 @@ class TestOpenMeteo:
             "surface_pressure": [950.0] * 48,
             "wind_speed_10m": [2.0] * 23 + [12.0] + [3.0] * 24,
             "wind_gusts_10m": [5.0] * 48,
+            "wind_direction_10m": [0.0] * 24 + [90.0] * 24,  # day1 from N, day2 from E
             "precipitation": [0.1] * 48,
             "soil_temperature_0_to_7cm": [28.0] * 48,
             "soil_moisture_0_to_7cm": [0.05] * 48,
@@ -48,6 +49,11 @@ class TestOpenMeteo:
         assert np.isclose(out["precip_sum"].iloc[0], 0.1 * 24, atol=1e-6)
         assert (out["vpd_mean"] > 0).all()  # dry desert air
         assert out["t2m_max"].iloc[1] == 40.0
+        # Day 1 wind entirely from N -> northerly_frac 1; day 2 from E -> 0
+        assert np.isclose(out["northerly_frac"].iloc[0], 1.0)
+        assert np.isclose(out["northerly_frac"].iloc[1], 0.0)
+        # Northerly component positive on day 1, ~0 on day 2 (easterly)
+        assert out["wind_n_mean"].iloc[0] > out["wind_n_mean"].iloc[1]
 
 
 class TestISD:

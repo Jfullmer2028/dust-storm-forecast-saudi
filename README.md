@@ -1,6 +1,8 @@
 # Dust-Storm Forecast — Saudi Arabia
 
-Predict dust-storm onset **24 hours in advance** at **eight** Saudi Arabian weather stations (**2018–2022**) using XGBoost. This project tests whether adding a **MODIS MCD43A3-derived shortwave broadband albedo anomaly** (spatial mean within **200 km**) improves the **F₂-score** over a baseline model using only ERA5 meteorology, static soil properties, and NDVI.
+Predict dust-storm onset **24 hours in advance** at Saudi Arabian weather stations using XGBoost, and **identify which satellite / surface drivers actually matter**. The original question — *does satellite albedo improve forecasting?* — is answered as one part of a systematic **driver-ablation study** that ranks every physical driver group (wind, humidity, vegetation, albedo, soil, …) by its *incremental* skill.
+
+> **Headline finding (real data, Riyadh/Hafar/Sharurah, 2018–2020):** satellite **albedo does *not* significantly improve** 24-hour dust forecasting (ΔPR-AUC +0.004, 95% CI [−0.015, +0.022]), but **MODIS vegetation (NDVI) does** — it is the *only* driver group whose incremental contribution is significant (ΔPR-AUC **+0.018, 95% CI [+0.007, +0.037]**). The useful answer is not "albedo" but "**surface vegetation state**": where the satellite sees less green cover, next-day dust is more predictable. See [`results/report_real.md`](results/report_real.md).
 
 | Station | Region | WMO ID | Coordinates |
 |---------|--------|--------|-------------|
@@ -31,9 +33,10 @@ The pipeline will:
 2. Engineer features including MODIS albedo anomaly (±15-day DOY climatology from the 2013–2017 baseline)
 3. Train **baseline** vs **full** XGBoost models with `TimeSeriesSplit` (8 folds), tuning an **F₂-optimal decision threshold** on a held-out validation slice of each training fold
 4. Compare models on **PR-AUC** (primary), **ROC-AUC**, and operational **F₂**, each with a paired **bootstrap 95% CI** and **Wilcoxon** test, plus a **per-station** breakdown
-5. Write figures (incl. precision–recall curves) to `outputs/` and `results/report.md`
+5. Run a **driver ablation** — drop each physical driver group and measure its incremental PR-AUC (with bootstrap CIs) to find *what actually matters*
+6. Write figures (PR curves, ablation chart, SHAP) to `outputs/` and `results/report.md`
 
-Expected runtime: ~3–6 minutes on a laptop (~14.5k station-days; depends on SHAP).
+Expected runtime: ~6–10 minutes on a laptop (~14.5k station-days; the ablation retrains per driver group).
 
 ### Metrics — why PR-AUC is primary
 
@@ -57,27 +60,43 @@ thresholded decision?”*
 All three metrics agree and their CIs sit entirely above zero: on synthetic data
 the albedo anomaly delivers a **modest, statistically significant** gain — and the
 baseline is a genuinely competent forecaster (ROC-AUC 0.81, no degenerate folds).
+The driver ablation correctly recovers the two signals planted in the generator —
+**wind direction** (ΔPR-AUC +0.070) and **albedo** (+0.061) — as the only
+significant groups, validating the ablation method against ground truth.
 
 ### Real-data result (keyless `--mode real`, Riyadh/Hafar/Sharurah, 2018–2020)
 
-Run end-to-end on **live observations** (Open-Meteo ERA5 + ORNL MODIS + NOAA ISD + SoilGrids), 3,285 station-days, 201 dust events (6.1%):
+Run end-to-end on **live observations** (Open-Meteo ERA5 + ORNL MODIS + NOAA ISD + SoilGrids), 3,285 station-days, 201 dust events (6.1%).
+
+**Albedo question (head-to-head):** all three metrics agree on a **null** — adding satellite albedo does not significantly improve forecasting:
 
 | Metric | Baseline | Full (+ albedo) | Δ | 95% CI |
 |--------|----------|-----------------|---|--------|
-| **PR-AUC** (primary) | 0.117 | 0.116 | **−0.002** | [−0.021, +0.018] |
+| **PR-AUC** (primary) | 0.117 | 0.116 | −0.002 | [−0.021, +0.018] |
 | ROC-AUC | 0.713 | 0.718 | +0.005 | [−0.015, +0.025] |
 | F₂ @ tuned thr | 0.265 | 0.257 | −0.008 | [−0.035, +0.053] |
 
-On real data, **all three metrics agree on a null**: adding satellite albedo does
-**not** significantly improve 24-hour dust forecasting at these stations (every CI
-straddles zero). Tellingly, ROC-AUC ≈ 0.71 shows both models *do* have real
-dust-ranking skill — the meteorological baseline already captures the predictable
-signal, and albedo adds nothing on top of it. The threshold-free PR-AUC confirms
-this isn't an artifact of F₂'s noisy threshold. Albedo does help at southern
-**Sharurah** (per-station, in [`results/report_real.md`](results/report_real.md)),
-a mixed result worth follow-up. This uses a ±20 km MODIS footprint and a 1-year
-(2017) albedo baseline; widening both (`--albedo-km`, more `--modis-years`) is the
-natural next step.
+**Driver ablation (what actually matters):** the incremental PR-AUC of each driver group, ranked. **Vegetation (NDVI) is the only significant driver**:
+
+| Driver group | Incremental PR-AUC | 95% CI | Significant |
+|--------------|--------------------|--------|-------------|
+| **vegetation (NDVI)** | **+0.018** | **[+0.007, +0.037]** | ✅ **yes** |
+| antecedent moisture | +0.008 | [−0.004, +0.021] | no |
+| seasonality | +0.008 | [−0.004, +0.021] | no |
+| pressure | +0.007 | [−0.002, +0.018] | no |
+| wind direction | +0.005 | [−0.018, +0.021] | no |
+| wind speed | +0.005 | [−0.023, +0.027] | no |
+| albedo | +0.004 | [−0.015, +0.022] | no |
+| humidity/dryness | −0.002 | [−0.018, +0.012] | no |
+| soil texture | −0.003 | [−0.013, +0.007] | no |
+
+So the genuinely useful answer is **not albedo but vegetation cover**: NDVI carries
+incremental 24-hour dust-forecast skill that the meteorological baseline does not —
+where the satellite sees less green cover (more exposed erodible surface), next-day
+dust is more predictable. ROC-AUC ≈ 0.71 confirms both models have real skill; the
+baseline already captures the wind/humidity signal, so most groups add nothing on
+top. This uses a ±20 km MODIS footprint and a 1-year (2017) albedo baseline;
+widening both (`--albedo-km`, more `--modis-years`) is the natural next step.
 
 ## Project Structure
 
@@ -96,10 +115,10 @@ dust-storm-forecast-saudi/
 ├── src/
 │   ├── acquisition.py       # GEE/CDS/ISD acquisition + synthetic generator
 │   ├── real_sources.py      # Keyless real APIs (Open-Meteo/ORNL/NOAA/SoilGrids)
-│   ├── features.py          # Albedo anomaly, lags, temporal encodings, feature sets
+│   ├── features.py          # Albedo anomaly, lags, encodings, feature sets, driver groups
 │   ├── labeling.py          # Dual-criterion & visibility-only labels
-│   ├── models.py            # XGBoost CV, F₂-threshold tuning, Optuna
-│   └── evaluation.py        # F₂ comparison, Wilcoxon, bootstrap, per-station, SHAP
+│   ├── models.py            # XGBoost CV, PR-AUC/ROC-AUC/F₂, threshold tuning, Optuna
+│   └── evaluation.py        # Metric comparison, driver ablation, bootstrap, per-station, SHAP
 ├── tests/                   # Pytest suite (features, labels, CV, real sources, smoke)
 ├── outputs/                 # Figures + feature importance (outputs/real/ for real mode)
 └── results/
@@ -118,18 +137,20 @@ The suite covers albedo-anomaly math (incl. DOY wrap-around at year end), the
 dual-criterion and visibility-only labels, the next-day label shift,
 train-fold-only imputation, temporal-leakage-free CV splits, F₂-optimal
 threshold tuning, per-fold PR-AUC/ROC-AUC, the paired bootstrap CI for ΔPR-AUC,
-per-station PR-AUC/F₂, the Wilcoxon statistics, a guard
-that the meteorological baseline is **never degenerate** (no 0.000 folds), the
-keyless real-source parsers (Open-Meteo aggregation, NOAA ISD visibility
-parsing, the Liang albedo / NDVI computation — all network-mocked so CI stays
-offline), and an end-to-end smoke test on the bundled synthetic data. CI (GitHub
-Actions) runs the tests on Python 3.10–3.12 plus a full synthetic pipeline run,
-and uploads the report and figures as artifacts.
+per-station PR-AUC/F₂, the **feature-group assignment and driver ablation**
+(verifying the ablation recovers a known driver above noise), the Wilcoxon
+statistics, a guard that the meteorological baseline is **never degenerate** (no
+0.000 folds), the keyless real-source parsers (Open-Meteo aggregation incl.
+wind-direction decomposition, NOAA ISD visibility parsing, the Liang albedo /
+NDVI computation — all network-mocked so CI stays offline), and an end-to-end
+smoke test on the bundled synthetic data. CI (GitHub Actions) runs the tests on
+Python 3.10–3.12 plus a full synthetic pipeline run, and uploads the report and
+figures as artifacts.
 
 ## Models
 
 ### Baseline features
-ERA5 daily aggregates (wind, BLH, RH, soil moisture, precipitation, etc.), lag/diff features, NDVI, static SoilGrids properties (clay, sand, silt, OCS, bulk density), and cyclical day-of-year / month encodings.
+ERA5 daily aggregates — wind speed/gust, **wind-direction components (the NW shamal: `wind_n_mean`, `wind_e_mean`, `northerly_frac`)**, RH/VPD, boundary-layer height, soil moisture/temperature, precipitation (incl. 7-day antecedent) — plus lag/diff features, NDVI, static SoilGrids properties (clay, sand, silt, OCS, bulk density), and cyclical day-of-year / month encodings. For the **driver ablation** these are bucketed into physical groups (`wind_speed`, `wind_direction`, `humidity_dryness`, `antecedent_moisture`, `thermal_blh`, `pressure`, `vegetation`, `soil_texture`, `seasonality`, `albedo`) via `build_feature_groups`.
 
 ### Full model (baseline + albedo)
 Adds four MODIS MCD43A3 features within 200 km radius:
@@ -236,11 +257,15 @@ After a successful run:
 
 | File | Description |
 |------|-------------|
-| `results/report.md` | Full F₂ comparison, Wilcoxon p-value, bootstrap CI |
-| `outputs/f2_comparison_by_fold.png` | Per-fold baseline vs full bar chart |
+| `results/report.md` / `report_real.md` | PR-AUC/ROC-AUC/F₂ comparison, driver ablation, per-station, stats |
+| `outputs/driver_ablation.png` | **Incremental PR-AUC by driver group (the "what matters" chart)** |
+| `outputs/driver_ablation.csv` | Ablation table (incremental PR-AUC + CIs) |
+| `outputs/pr_curves.png` | Precision–recall curves (baseline vs full) |
+| `outputs/f2_comparison_by_fold.png` | Per-fold F₂ bar chart |
 | `outputs/bootstrap_delta_f2.png` | Bootstrap ΔF₂ histogram |
 | `outputs/shap_importance.png` | Top-20 SHAP features (full model) |
-| `data/final/master_dataset.csv` | Merged feature matrix |
+| `data/final/master_dataset[_real].csv` | Merged feature matrix |
+| `outputs/real/…` | Same figures for the real-data run |
 
 ## Requirements
 

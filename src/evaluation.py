@@ -423,6 +423,102 @@ def full_statistical_analysis(
     }
 
 
+def run_group_ablation(
+    df: pd.DataFrame,
+    full_features: list[str],
+    n_splits: int = 5,
+    xgb_params: dict | None = None,
+    random_state: int = 42,
+    n_bootstrap: int = 2000,
+    output_dir: str | Path = "outputs",
+) -> pd.DataFrame:
+    """
+    Quantify the incremental value of each physical driver group.
+
+    For each group g, retrain on (all features − g) and measure the drop in
+    PR-AUC relative to the full model on the same out-of-fold predictions:
+
+        incremental(g) = PR-AUC(all) − PR-AUC(all − g)
+
+    A paired bootstrap 95% CI entirely above zero means group g contributes
+    skill that no other group supplies — i.e. that driver *actually matters*.
+    """
+    from src.features import build_feature_groups
+    from src.models import run_cross_validation
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    groups = build_feature_groups(full_features)
+
+    print("\n" + "=" * 60)
+    print("DRIVER ABLATION — incremental PR-AUC by feature group")
+    print("=" * 60)
+
+    full_res = run_cross_validation(
+        df, full_features, n_splits=n_splits, random_state=random_state,
+        xgb_params=xgb_params, verbose=False,
+    )
+    y_true = np.concatenate(full_res["fold_true"])
+    proba_full = np.concatenate(full_res["fold_proba"])
+
+    rows = []
+    for gname, gfeats in groups.items():
+        reduced = [f for f in full_features if f not in set(gfeats)]
+        if not reduced:
+            continue
+        res = run_cross_validation(
+            df, reduced, n_splits=n_splits, random_state=random_state,
+            xgb_params=xgb_params, verbose=False,
+        )
+        proba_reduced = np.concatenate(res["fold_proba"])
+        # delta = full − reduced = the group's incremental PR-AUC contribution.
+        cmp = bootstrap_auc_ci(
+            y_true, proba_reduced, proba_full, metric="ap",
+            n_bootstrap=n_bootstrap, random_state=random_state,
+        )
+        rows.append(
+            {
+                "group": gname,
+                "n_features": len(gfeats),
+                "incremental_pr_auc": cmp["delta"],
+                "ci_lo": cmp["lo"],
+                "ci_hi": cmp["hi"],
+                "significant": cmp["lo"] > 0,
+            }
+        )
+        print(
+            f"  {gname:<20} ΔPR-AUC={cmp['delta']:+.4f} "
+            f"[{cmp['lo']:+.4f}, {cmp['hi']:+.4f}]"
+            f"{'  *' if cmp['lo'] > 0 else ''}"
+        )
+
+    table = pd.DataFrame(rows).sort_values(
+        "incremental_pr_auc", ascending=False
+    ).reset_index(drop=True)
+
+    # Horizontal bar chart with 95% CI whiskers.
+    fig, ax = plt.subplots(figsize=(8, 0.5 * len(table) + 1.5))
+    y = np.arange(len(table))[::-1]
+    colors = ["#2E7D32" if s else "#9E9E9E" for s in table["significant"]]
+    err_lo = (table["incremental_pr_auc"] - table["ci_lo"]).clip(lower=0)
+    err_hi = (table["ci_hi"] - table["incremental_pr_auc"]).clip(lower=0)
+    ax.barh(y, table["incremental_pr_auc"], color=colors,
+            xerr=[err_lo, err_hi], capsize=3, alpha=0.9)
+    ax.axvline(0, color="black", lw=1)
+    ax.set_yticks(y)
+    ax.set_yticklabels(table["group"])
+    ax.set_xlabel("Incremental PR-AUC (full − without group)")
+    ax.set_title("Which drivers matter for 24-h dust onset?\n"
+                 "(green = 95% CI above zero)")
+    plt.tight_layout()
+    plt.savefig(output_dir / "driver_ablation.png", dpi=150)
+    plt.close()
+
+    table.to_csv(output_dir / "driver_ablation.csv", index=False)
+    return table
+
+
 def plot_feature_importance(
     df: pd.DataFrame,
     feature_cols: list[str],
@@ -486,6 +582,7 @@ def write_report(
     df: pd.DataFrame,
     output_path: str | Path = "results/report.md",
     data_mode: str = "synthetic",
+    ablation_df: "pd.DataFrame | None" = None,
 ) -> None:
     """Write final markdown report with all results."""
     output_path = Path(output_path)
@@ -585,6 +682,37 @@ def write_report(
                 f"{r['ap_full'] - r['ap_base']:+.4f} | "
                 f"{r['f2_base']:.4f} | {r['f2_full']:.4f} |"
             )
+        lines.append("")
+
+    # Driver ablation — the "what actually matters" finding
+    if ablation_df is not None and not ablation_df.empty:
+        sig = ablation_df[ablation_df["significant"]]
+        lines.extend(
+            [
+                "## Driver Ablation — What Actually Matters",
+                "",
+                "Incremental PR-AUC of each physical driver group "
+                "(full model − model without that group), with paired bootstrap "
+                "95% CIs. A CI entirely above zero means the driver contributes "
+                "skill no other group supplies.",
+                "",
+                "| Driver group | # feats | Incremental PR-AUC | 95% CI | Significant |",
+                "|--------------|---------|--------------------|--------|-------------|",
+            ]
+        )
+        for _, r in ablation_df.iterrows():
+            lines.append(
+                f"| {r['group']} | {int(r['n_features'])} | "
+                f"{r['incremental_pr_auc']:+.4f} | "
+                f"[{r['ci_lo']:+.4f}, {r['ci_hi']:+.4f}] | "
+                f"{'**yes**' if r['significant'] else 'no'} |"
+            )
+        if not sig.empty:
+            drivers = ", ".join(sig["group"].tolist())
+            lines += [
+                "",
+                f"**Significant drivers of next-day dust:** {drivers}.",
+            ]
         lines.append("")
 
     apw = stats["ap_wilcoxon"]

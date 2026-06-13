@@ -111,6 +111,9 @@ BASELINE_FEATURES = [
     "sm_mean",
     "soilt_mean",
     "ustar_max",
+    "wind_n_mean",
+    "wind_e_mean",
+    "northerly_frac",
     "precip_sum",
     "precip_7d",
     *[f"{c}_lag{l}" for c in ERA5_LAG_COLS for l in [1, 2, 3]],
@@ -160,6 +163,9 @@ REAL_BASELINE_FEATURES = [
     "soilt_mean",
     "cloud_mean",
     "vpd_mean",
+    "wind_n_mean",
+    "wind_e_mean",
+    "northerly_frac",
     "precip_sum",
     "precip_7d",
     *[f"{c}_lag{l}" for c in REAL_LAG_COLS for l in [1, 2, 3]],
@@ -177,3 +183,43 @@ REAL_BASELINE_FEATURES = [
 ]
 
 REAL_FULL_FEATURES = REAL_BASELINE_FEATURES + ALBEDO_FEATURES
+
+
+# ---------------------------------------------------------------------------
+# Physically-motivated feature groups for the driver-ablation analysis.
+# Each group is a candidate "driver" of next-day dust whose incremental value
+# we quantify by dropping it and measuring the change in PR-AUC.
+# ---------------------------------------------------------------------------
+
+def assign_group(feature: str) -> str:
+    """Map a feature name to its physical driver group."""
+    f = feature
+    if "albedo" in f:
+        return "albedo"
+    if f.startswith(("wind_n", "wind_e", "northerly", "wdir")):
+        return "wind_direction"
+    if f.startswith(("ws_", "gust", "ustar")):
+        return "wind_speed"
+    if f.startswith(("rh_", "td_", "vpd", "tcwv", "cloud")):
+        return "humidity_dryness"
+    if f.startswith(("sm_", "precip")):
+        return "antecedent_moisture"
+    if f.startswith(("t2m", "soilt", "blh")):
+        return "thermal_blh"
+    if f.startswith("sp"):
+        return "pressure"
+    if f.startswith("ndvi"):
+        return "vegetation"
+    if f.startswith("soil_"):
+        return "soil_texture"
+    if f.startswith(("doy_", "month_")):
+        return "seasonality"
+    return "other"
+
+
+def build_feature_groups(features: list[str]) -> dict[str, list[str]]:
+    """Bucket a feature list into ordered driver groups (non-empty only)."""
+    groups: dict[str, list[str]] = {}
+    for f in features:
+        groups.setdefault(assign_group(f), []).append(f)
+    return groups

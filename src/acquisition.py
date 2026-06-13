@@ -431,6 +431,15 @@ def generate_synthetic_station_data(
     for t in range(1, n):
         E[t] = phi_e * E[t - 1] + np.sqrt(1 - phi_e**2) * eps_e[t]
 
+    # Latent wind-direction (shamal) index D_t ~ AR(1) — partly independent of
+    # the synoptic strength S, so northerly flow carries dust information beyond
+    # wind *speed* alone (the physical basis of the Arabian shamal).
+    phi_d = 0.70
+    eps_d = rng.normal(0, 1, n)
+    D = np.zeros(n)
+    for t in range(1, n):
+        D[t] = phi_d * D[t - 1] + np.sqrt(1 - phi_d**2) * eps_d[t]
+
     # --- ERA5-like daily weather driven by the synoptic index ---
     seasonal_ws = 4.0 + 2.5 * np.sin(2 * np.pi * (doy - 100) / 365.25)
     ws_max = np.clip(
@@ -457,6 +466,14 @@ def generate_synthetic_station_data(
     )
     era5["soilt_mean"] = era5["t2m_mean"] - rng.uniform(2, 8, n)
     era5["ustar_max"] = era5["ws_max"] * 0.08 + np.abs(rng.normal(0, 0.02, n))
+    # Wind direction (resultant northerly / easterly components, m/s) and the
+    # fraction of the day with northerly flow — driven by S (strength) and D
+    # (shamal direction). Northerly component grows with both.
+    era5["wind_n_mean"] = 1.4 * S + 1.6 * D + rng.normal(0, 0.8, n)
+    era5["wind_e_mean"] = -0.4 * D + rng.normal(0, 1.5, n)
+    era5["northerly_frac"] = np.clip(
+        0.45 + 0.12 * (S + D) + rng.normal(0, 0.07, n), 0, 1
+    )
     precip = rng.exponential(0.0008, n) * (1 - season)
     era5["precip_sum"] = precip
     era5["precip_7d"] = (
@@ -472,10 +489,12 @@ def generate_synthetic_station_data(
     # --- Dust intensity on day t: contemporaneous synoptic forcing plus the
     #     erodibility built the previous day (which the albedo anomaly sees) ---
     E_lag = np.concatenate([[0.0], E[:-1]])
+    D_lag = np.concatenate([[0.0], D[:-1]])
     dust_score = (
         1.15 * met_strength * np.clip(S, 0, None)
         + 0.55 * season * np.clip(S, 0, None)
         + 0.95 * erod_weight * np.clip(E_lag, 0, None)
+        + 0.60 * np.clip(D_lag, 0, None)  # northerly shamal precursor
         + 0.25 * season
         + rng.normal(0, 0.45, n)
     )

@@ -27,6 +27,7 @@ from src.evaluation import (  # noqa: E402
     evaluate_both_models,
     full_statistical_analysis,
     plot_feature_importance,
+    run_group_ablation,
     write_report,
 )
 from src.features import (  # noqa: E402
@@ -308,8 +309,20 @@ def main() -> None:
         output_dir=output_dir,
     )
 
-    # --- Step 4: Feature importance ---
-    print("\n[4/4] SHAP feature importance (full model)...")
+    # --- Step 4: Driver ablation (what actually matters) ---
+    print("\n[4/5] Driver ablation (incremental PR-AUC by group)...")
+    ablation_df = run_group_ablation(
+        df,
+        full_features,
+        n_splits=n_splits,
+        xgb_params=xgb_params,
+        random_state=random_state,
+        n_bootstrap=2000,
+        output_dir=output_dir,
+    )
+
+    # --- Step 5: Feature importance ---
+    print("\n[5/5] SHAP feature importance (full model)...")
     plot_feature_importance(
         df,
         full_features,
@@ -324,6 +337,7 @@ def main() -> None:
         df,
         output_path=report_path,
         data_mode=mode,
+        ablation_df=ablation_df,
     )
 
     print("\n" + "=" * 60)

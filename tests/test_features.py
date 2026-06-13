@@ -8,8 +8,11 @@ from src.features import (
     ALBEDO_FEATURES,
     BASELINE_FEATURES,
     FULL_FEATURES,
+    REAL_FULL_FEATURES,
     add_lag_features,
     add_temporal_features,
+    assign_group,
+    build_feature_groups,
     compute_albedo_anomaly,
 )
 
@@ -104,3 +107,39 @@ class TestFeatureSets:
 
     def test_no_duplicate_features(self):
         assert len(FULL_FEATURES) == len(set(FULL_FEATURES))
+
+
+class TestFeatureGroups:
+    def test_assignments(self):
+        cases = {
+            "albedo_anomaly": "albedo",
+            "wind_n_mean": "wind_direction",
+            "northerly_frac": "wind_direction",
+            "ws_max": "wind_speed",
+            "ws_max_lag1": "wind_speed",
+            "gust_max": "wind_speed",
+            "rh_mean": "humidity_dryness",
+            "vpd_mean": "humidity_dryness",
+            "sm_mean": "antecedent_moisture",
+            "precip_7d": "antecedent_moisture",
+            "t2m_mean": "thermal_blh",
+            "sp_mean": "pressure",
+            "ndvi": "vegetation",
+            "soil_clay_0-5cm": "soil_texture",
+            "doy_sin": "seasonality",
+        }
+        for feat, grp in cases.items():
+            assert assign_group(feat) == grp, feat
+
+    def test_every_full_feature_grouped_no_other(self):
+        for feats in (FULL_FEATURES, REAL_FULL_FEATURES):
+            groups = build_feature_groups(feats)
+            assert "other" not in groups  # every feature has a physical group
+            # Partition is exact and lossless
+            assert sum(len(v) for v in groups.values()) == len(feats)
+
+    def test_wind_direction_group_present(self):
+        groups = build_feature_groups(FULL_FEATURES)
+        assert set(groups["wind_direction"]) == {
+            "wind_n_mean", "wind_e_mean", "northerly_frac"
+        }

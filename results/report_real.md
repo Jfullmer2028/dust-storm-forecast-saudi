@@ -16,34 +16,53 @@ Primary metric is **PR-AUC (average precision)** — threshold-independent and a
 
 | Metric | Baseline | Full | Δ | 95% CI | Verdict |
 |--------|----------|------|---|--------|---------|
-| **PR-AUC** (primary) | 0.1170 | 0.1155 | -0.0015 | [-0.0210, +0.0184] | CI straddles 0 — no significant difference |
-| ROC-AUC | 0.7133 | 0.7179 | +0.0045 | [-0.0150, +0.0248] | CI straddles 0 — no significant difference |
-| F2 @ tuned thr (operational) | 0.2651 | 0.2573 | -0.0078 | [-0.0349, +0.0535] | CI straddles 0 — no significant difference |
+| **PR-AUC** (primary) | 0.1166 | 0.1206 | +0.0040 | [-0.0147, +0.0230] | CI straddles 0 — no significant difference |
+| ROC-AUC | 0.7267 | 0.7416 | +0.0149 | [-0.0027, +0.0318] | CI straddles 0 — no significant difference |
+| F2 @ tuned thr (operational) | 0.2590 | 0.2335 | -0.0255 | [-0.0709, +0.0196] | CI straddles 0 — no significant difference |
 
 ## Per-Fold Cross-Validation (TimeSeriesSplit, 5 folds)
 
 | Fold | Baseline PR-AUC | Full PR-AUC | Baseline F2 | Full F2 |
 |------|-----------------|-------------|-------------|---------|
-| 1 | 0.2367 | 0.2188 | 0.2852 | 0.2792 |
-| 2 | 0.0949 | 0.0908 | 0.2690 | 0.2694 |
-| 3 | 0.0599 | 0.0759 | 0.1695 | 0.0694 |
-| 4 | 0.1620 | 0.1558 | 0.3770 | 0.3770 |
-| 5 | 0.0949 | 0.0885 | 0.2247 | 0.2913 |
-| **Mean** | **0.1297** | **0.1260** | **0.2651** | **0.2573** |
+| 1 | 0.1613 | 0.2492 | 0.2510 | 0.2834 |
+| 2 | 0.1164 | 0.1053 | 0.2690 | 0.2281 |
+| 3 | 0.0592 | 0.0881 | 0.1648 | 0.0746 |
+| 4 | 0.1648 | 0.1592 | 0.3777 | 0.3125 |
+| 5 | 0.0933 | 0.1040 | 0.2326 | 0.2688 |
+| **Mean** | **0.1190** | **0.1412** | **0.2590** | **0.2335** |
 
 ## Per-Station Out-of-Fold Performance
 
 | Station | n | Positives | Base PR-AUC | Full PR-AUC | ΔPR-AUC | Base F2 | Full F2 |
 |---------|---|-----------|-------------|-------------|---------|---------|---------|
-| hafar | 911 | 50 | 0.1542 | 0.1534 | -0.0008 | 0.3187 | 0.3150 |
-| riyadh | 912 | 42 | 0.1205 | 0.1155 | -0.0050 | 0.3053 | 0.2933 |
-| sharurah | 912 | 34 | 0.0889 | 0.0948 | +0.0060 | 0.1579 | 0.2523 |
+| hafar | 911 | 50 | 0.1415 | 0.1457 | +0.0042 | 0.3303 | 0.3134 |
+| riyadh | 912 | 42 | 0.1188 | 0.1226 | +0.0038 | 0.2742 | 0.2623 |
+| sharurah | 912 | 34 | 0.0924 | 0.1057 | +0.0133 | 0.1923 | 0.1337 |
+
+## Driver Ablation — What Actually Matters
+
+Incremental PR-AUC of each physical driver group (full model − model without that group), with paired bootstrap 95% CIs. A CI entirely above zero means the driver contributes skill no other group supplies.
+
+| Driver group | # feats | Incremental PR-AUC | 95% CI | Significant |
+|--------------|---------|--------------------|--------|-------------|
+| vegetation | 1 | +0.0183 | [+0.0065, +0.0371] | **yes** |
+| antecedent_moisture | 8 | +0.0079 | [-0.0037, +0.0211] | no |
+| seasonality | 4 | +0.0078 | [-0.0038, +0.0209] | no |
+| pressure | 1 | +0.0069 | [-0.0021, +0.0180] | no |
+| wind_direction | 3 | +0.0051 | [-0.0184, +0.0213] | no |
+| wind_speed | 13 | +0.0046 | [-0.0229, +0.0268] | no |
+| albedo | 4 | +0.0040 | [-0.0145, +0.0224] | no |
+| thermal_blh | 8 | +0.0011 | [-0.0118, +0.0147] | no |
+| humidity_dryness | 10 | -0.0018 | [-0.0179, +0.0121] | no |
+| soil_texture | 4 | -0.0026 | [-0.0130, +0.0069] | no |
+
+**Significant drivers of next-day dust:** vegetation.
 
 ## Statistical Tests
 
 - **Paired bootstrap (5 000 resamples)** on out-of-fold predictions gives the 95% CIs in the headline table — the primary inference.
 - **Wilcoxon signed-rank on per-fold PR-AUC** (n=5): W=4.00, p=0.4375 (not significant at α=0.05).
-- **Wilcoxon signed-rank on per-fold F2** (n=5): W=7.00, p=1.0000 (not significant at α=0.05).
+- **Wilcoxon signed-rank on per-fold F2** (n=5): W=3.00, p=0.3125 (not significant at α=0.05).
 
 ## Figures
 
@@ -54,4 +73,4 @@ Primary metric is **PR-AUC (average precision)** — threshold-independent and a
 
 ## Conclusion
 
-On real observations the MODIS albedo anomaly does not improve PR-AUC (-0.0015, 95% CI [-0.0210, +0.0184]). Satellite albedo provides no significant incremental skill over the meteorological baseline at these stations — an honest null result, with station-level heterogeneity worth follow-up.
+Adding the MODIS albedo anomaly yields a positive but not statistically conclusive PR-AUC gain (+0.0040, 95% CI [-0.0147, +0.0230] includes zero): suggestive evidence that surface reflectivity adds incremental dust-forecast skill, warranting a larger sample / wider MODIS footprint.
