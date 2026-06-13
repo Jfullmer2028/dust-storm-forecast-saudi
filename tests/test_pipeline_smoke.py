@@ -53,8 +53,8 @@ def test_master_dataset_shape_and_labels(master_df):
     assert set(FULL_FEATURES) <= set(master_df.columns)
 
 
-def test_baseline_is_not_degenerate(master_df):
-    """The meteorological baseline must have real 24h skill (no 0.000 folds)."""
+def test_baseline_has_real_skill(master_df):
+    """The meteorological baseline has genuine 24h skill on every fold."""
     baseline = run_cross_validation(
         master_df,
         BASELINE_FEATURES,
@@ -62,7 +62,7 @@ def test_baseline_is_not_degenerate(master_df):
         xgb_params={"n_estimators": 120},
         verbose=False,
     )
-    # Synoptic persistence gives the baseline genuine next-day signal.
+    # Synoptic persistence gives the baseline a real next-day signal.
     assert baseline["mean_f2"] > 0.20
     assert (baseline["fold_f2"] > 0.0).all()
 
@@ -75,12 +75,11 @@ def test_cv_runs_and_albedo_improves_f2(master_df, tmp_path):
     full = run_cross_validation(
         master_df, FULL_FEATURES, n_splits=6, xgb_params=fast, verbose=False
     )
-    # Albedo carries an incremental precursor signal: a modest but consistent
-    # improvement, not an artefactual landslide.
+    # Albedo carries an incremental precursor signal: a modest, consistent gain.
     assert full["mean_f2"] > baseline["mean_f2"]
     assert 0.0 < (full["mean_f2"] - baseline["mean_f2"]) < 0.5
 
-    # Decision thresholds are tuned, never the naive 0.5 default everywhere.
+    # Decision thresholds are tuned per fold, not a fixed default.
     assert all(0.0 < t < 1.0 for t in full["fold_threshold"])
 
     stats = full_statistical_analysis(

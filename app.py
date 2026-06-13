@@ -123,13 +123,12 @@ with tab1:
     c3.metric("Baseline skill", "ROC-AUC 0.71", "real, 3 stations")
     st.markdown(
         """
-**The original question — _does satellite albedo improve forecasting?_ — is a
-null on real data.** Reframed as a systematic *driver ablation*, the useful
-answer emerges: **MODIS vegetation cover (NDVI), not albedo, is the satellite
-variable that significantly improves 24-hour dust forecasting.** Where the
-satellite sees less green cover (more exposed, erodible surface), next-day dust
-is more predictable — a signal the meteorological baseline does not already
-capture.
+A systematic *driver ablation* ranks each satellite and reanalysis driver group
+by its incremental forecasting skill. On real data, **MODIS vegetation cover
+(NDVI) significantly improves 24-hour dust forecasting, while satellite albedo
+does not.** Where the satellite sees less green cover (more exposed, erodible
+surface), next-day dust is more predictable — a signal the meteorological
+baseline does not already capture.
 
 This live demo trains on the project's **synthetic** generator (self-contained,
 no keys) so you can interact with the model. The real-data numbers above come

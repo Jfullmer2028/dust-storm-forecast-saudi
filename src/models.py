@@ -137,8 +137,8 @@ def run_cross_validation(
         model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
 
         # Pick the probability threshold that maximises F2 on the validation
-        # slice, then apply it to the held-out test fold. This replaces the
-        # naive 0.5 cut-off that produced degenerate 0.000 F2 scores.
+        # slice, then apply it to the held-out test fold (rather than a fixed
+        # 0.5 cut-off). PR-AUC and ROC-AUC remain threshold-free.
         val_proba = model.predict_proba(X_val)[:, 1]
         threshold = optimal_f2_threshold(y_val, val_proba, beta=2.0)
 
