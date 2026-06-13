@@ -1,11 +1,14 @@
 name: Deploy project page (GitHub Pages)
 
-# One-time setup: repo Settings → Pages → Source = "GitHub Actions".
-# Then every push that touches docs/ publishes the static site.
+# ONE-TIME SETUP (repo admin, ~10 s): Settings → Pages → Build and deployment →
+# Source = "GitHub Actions". The default GITHUB_TOKEN cannot enable Pages
+# programmatically, so this toggle is required once. After that, every push to
+# main that touches docs/ publishes https://<owner>.github.io/<repo>/.
+# Deploys from the default branch only (so it never adds a red check to PRs).
 
 on:
   push:
-    branches: ["main", "claude/satellite-albedo-dust-forecasting-aru3mg"]
+    branches: ["main"]
     paths: ["docs/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
@@ -27,10 +30,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-        with:
-          # Programmatically enable Pages (Actions source) so no manual
-          # Settings → Pages toggle is required for the first deploy.
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs
