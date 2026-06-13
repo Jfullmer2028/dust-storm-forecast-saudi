@@ -107,7 +107,7 @@ def get_albedo_timeseries(
     roi = point.buffer(radius_m)
 
     collection = (
-        ee.ImageCollection("MODIS/006/MCD43A3")
+        ee.ImageCollection("MODIS/061/MCD43A3")
         .filterDate(start, end)
         .filterBounds(roi)
         .select("Albedo_WSA_shortwave")
@@ -158,7 +158,7 @@ def get_mod09a1_timeseries(
     roi = point.buffer(radius_m)
 
     collection = (
-        ee.ImageCollection("MODIS/006/MOD09A1")
+        ee.ImageCollection("MODIS/061/MOD09A1")
         .filterDate(start, end)
         .filterBounds(roi)
         .select(["sur_refl_b01", "sur_refl_b02", "sur_refl_b06"])

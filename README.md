@@ -102,15 +102,16 @@ widening both (`--albedo-km`, more `--modis-years`) is the natural next step.
 
 ```
 dust-storm-forecast-saudi/
-├── config.yaml              # Stations, paths, model settings
-├── run_pipeline.py          # Master script
-├── requirements.txt         # Core dependencies (synthetic mode)
-├── requirements-real.txt    # Extra deps for real-data acquisition
-├── .github/workflows/ci.yml # CI: unit tests + full pipeline smoke run
+├── config.yaml              # Stations, paths, model + real-mode settings
+├── run_pipeline.py          # Master script (synthetic / keyless real)
+├── app.py                   # 🎛️ Streamlit interactive demo
+├── PAPER.md                 # 📄 Succinct paper (abstract → conclusion)
+├── docs/index.html          # 🌐 Live GitHub Pages project page + assets/
+├── requirements.txt         # Core deps · requirements-real.txt · requirements-demo.txt
+├── .github/workflows/       # ci.yml (tests + pipeline) · pages.yml (Pages deploy)
 ├── data/
 │   ├── synthetic/           # Pre-built test CSVs (no API keys needed)
 │   ├── raw/real/            # Cached keyless real downloads (gitignored)
-│   ├── processed/
 │   └── final/               # master_dataset[_real].csv (generated)
 ├── src/
 │   ├── acquisition.py       # GEE/CDS/ISD acquisition + synthetic generator
@@ -119,8 +120,8 @@ dust-storm-forecast-saudi/
 │   ├── labeling.py          # Dual-criterion & visibility-only labels
 │   ├── models.py            # XGBoost CV, PR-AUC/ROC-AUC/F₂, threshold tuning, Optuna
 │   └── evaluation.py        # Metric comparison, driver ablation, bootstrap, per-station, SHAP
-├── tests/                   # Pytest suite (features, labels, CV, real sources, smoke)
-├── outputs/                 # Figures + feature importance (outputs/real/ for real mode)
+├── tests/                   # Pytest suite (features, labels, CV, real sources, ablation, demo)
+├── outputs/                 # Figures incl. driver_ablation.png, pr_curves.png (outputs/real/ too)
 └── results/
     ├── report.md            # Synthetic-mode results (generated)
     └── report_real.md       # Keyless real-data results (generated)
@@ -272,13 +273,34 @@ After a successful run:
 - Python 3.9+
 - See `requirements.txt` for packages (`xgboost`, `pandas`, `xarray`, `scikit-learn`, `scipy`, `shap`, `optuna`, etc.)
 
+## Interactive demo & paper
+
+- **Live demo:** `streamlit run app.py` — explore the driver ablation, a what-if
+  dust-risk predictor (move wind/humidity/NDVI/albedo sliders for a live
+  probability), and per-station forecasts. One-click deploy to
+  [Streamlit Community Cloud](https://streamlit.io/cloud) for a public URL.
+  Install with `pip install -r requirements-demo.txt`.
+- **Project page (GitHub Pages):** [`docs/index.html`](docs/index.html) — a
+  static, self-contained dashboard with the findings, figures, and an in-browser
+  dust-risk calculator (deployed by `.github/workflows/pages.yml`).
+- **Short paper:** [`PAPER.md`](PAPER.md) — abstract, methods, results,
+  discussion, limitations.
+
 ## Citation & Background
 
-This implementation follows the methodology in the project research guide:
-- MODIS MCD43A3 shortwave broadband albedo (BSA/WSA)
-- NDDI dust index from MOD09A1 (Xu et al. 2006)
-- ERA5 meteorological predictors via Copernicus CDS
-- SoilGrids v2 static soil properties
+Methodology and data sources:
+- **Albedo (keyless path):** shortwave broadband albedo from MODIS MOD09A1 surface
+  reflectance via the **Liang (2001)** narrow-to-broadband conversion. *(The
+  optional GEE path uses native MODIS/061 MCD43A3 white-sky albedo.)*
+- **Vegetation / dust index:** NDVI (and NDDI, Qu et al. 2006) from MOD09A1.
+- **Meteorology:** ERA5 reanalysis via the keyless Open-Meteo archive *(or
+  Copernicus CDS in the GEE path)*.
+- **Visibility:** NOAA Integrated Surface Database (WMO dust-storm criterion).
+- **Soil:** ISRIC SoilGrids v2 static properties.
+
+References: Liang, S. (2001), *Narrowband to broadband conversions of land surface
+albedo*, Remote Sens. Environ. 76(2). Qu et al. (2006), NDDI. Hersbach et al.
+(2020), ERA5.
 
 ## License
 

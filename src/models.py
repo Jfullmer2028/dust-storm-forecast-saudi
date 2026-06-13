@@ -99,7 +99,9 @@ def run_cross_validation(
         cv = TimeSeriesSplit(n_splits=n_splits)
         splits = list(cv.split(X))
     elif cv_strategy == "station":
-        cv = GroupKFold(n_splits=3)
+        # True leave-one-station-out: one fold per station.
+        n_groups = len(np.unique(groups))
+        cv = GroupKFold(n_splits=n_groups)
         splits = list(cv.split(X, y, groups=groups))
     else:
         raise ValueError(f"Unknown cv_strategy: {cv_strategy}")
