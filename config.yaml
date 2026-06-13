@@ -15,47 +15,65 @@ study_years: [2018, 2019, 2020, 2021, 2022]
 
 # Eight dust-prone stations spanning central, northern, eastern and
 # southern Saudi Arabia (WMO IDs best-effort; coordinates are authoritative).
+# isd_usaf/isd_wban are the real NOAA ISD station identifiers matched to each
+# coordinate from the NCEI isd-history catalogue (used by --mode real).
 stations:
   riyadh:
     wmo_id: "404380"
     wban: "99999"
     lat: 24.93
     lon: 46.72
+    isd_usaf: "404370"
+    isd_wban: "99999"
   hafar:
     wmo_id: "403730"
     wban: "99999"
     lat: 28.33
     lon: 46.13
+    isd_usaf: "403730"
+    isd_wban: "99999"
   sharurah:
     wmo_id: "411400"
     wban: "99999"
     lat: 17.47
     lon: 47.12
+    isd_usaf: "411360"
+    isd_wban: "99999"
   dammam:
     wmo_id: "404160"
     wban: "99999"
     lat: 26.27
     lon: 50.15
+    isd_usaf: "404160"
+    isd_wban: "99999"
   tabuk:
     wmo_id: "403750"
     wban: "99999"
     lat: 28.37
     lon: 36.60
+    isd_usaf: "403750"
+    isd_wban: "99999"
   qassim:
     wmo_id: "404050"
     wban: "99999"
     lat: 26.30
     lon: 43.77
+    isd_usaf: "404050"
+    isd_wban: "99999"
   arar:
     wmo_id: "403570"
     wban: "99999"
     lat: 30.91
     lon: 41.14
+    isd_usaf: "403570"
+    isd_wban: "99999"
   najran:
     wmo_id: "411370"
     wban: "99999"
     lat: 17.61
     lon: 44.42
+    isd_usaf: "411280"
+    isd_wban: "99999"
 
 paths:
   data_raw: data/raw
@@ -94,6 +112,17 @@ soil_properties:
   - silt
   - ocs
   - bdod
+
+# Keyless real-data mode (Open-Meteo ERA5 + ORNL MODIS + NOAA ISD + SoilGrids).
+# MODIS is one ORNL request per band per 8-day composite, so the live run is
+# bounded by these settings. Override on the CLI with --stations / --study-years
+# / --modis-years / --albedo-km. Defaults give a tractable, genuinely-real run.
+real:
+  stations: [riyadh, hafar, sharurah]
+  study_years: [2020]
+  modis_years: [2019, 2020]   # extra year(s) form the albedo anomaly baseline
+  albedo_km: 20               # +/- box half-width for the MODIS spatial mean
+  n_cv_splits: 5
 
 synthetic:
   enabled: true

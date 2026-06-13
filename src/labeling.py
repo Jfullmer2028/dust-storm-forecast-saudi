@@ -49,6 +49,23 @@ def build_labels(
     return label
 
 
+def build_visibility_labels(
+    vis_flag: pd.Series,
+    index: pd.DatetimeIndex,
+) -> pd.Series:
+    """
+    Dust-event label from the WMO visibility criterion alone.
+
+    A confirmed dust day is any day with at least one hourly horizontal
+    visibility observation <= threshold (encoded in ``vis_flag``). Used for
+    real station data, where the 8-day MODIS NDDI composite is too coarse and
+    numerically unstable over bright desert to gate individual dust days.
+    """
+    label = vis_flag.reindex(index).fillna(False).astype(int)
+    label.name = "dust_event"
+    return label
+
+
 def build_master_dataframe(
     station_name: str,
     era5_df: pd.DataFrame,
@@ -58,14 +75,25 @@ def build_master_dataframe(
     soil_feats: dict,
     study_start: str = "2018",
     study_end: str = "2020",
+    label_mode: str = "dual",
 ) -> pd.DataFrame:
     """
     Merge all feature sources and the next-day dust label.
 
     Features on day D predict dust onset on day D+1 (label shifted -1).
+
+    label_mode:
+      'dual'        NDDI > 0 AND visibility <= threshold (synthetic / GEE path)
+      'visibility'  visibility <= threshold only (keyless real path; WMO dust
+                    criterion, robust to unstable 8-day NDDI over desert)
     """
-    nddi_daily = build_nddi_daily(mod09_df)
-    label = build_labels(nddi_daily, vis_flag)
+    if label_mode == "visibility":
+        label = build_visibility_labels(
+            vis_flag, pd.to_datetime(era5_df.index)
+        )
+    else:
+        nddi_daily = build_nddi_daily(mod09_df)
+        label = build_labels(nddi_daily, vis_flag)
     label_shifted = label.shift(-1)
     label_shifted.name = "dust_event_next_day"
 

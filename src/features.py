@@ -135,3 +135,45 @@ ALBEDO_FEATURES = [
 ]
 
 FULL_FEATURES = BASELINE_FEATURES + ALBEDO_FEATURES
+
+
+# ---------------------------------------------------------------------------
+# Feature sets for the keyless real-data path (Open-Meteo ERA5 + ORNL MODIS).
+# Open-Meteo's archive does not expose boundary-layer height, friction velocity
+# or column water vapour, so the real baseline uses the available daily fields
+# (plus gust, VPD and cloud cover, which are strong dust proxies) instead.
+# ---------------------------------------------------------------------------
+
+REAL_LAG_COLS = ["ws_max", "ws_mean", "rh_mean", "sm_mean", "t2m_mean"]
+
+REAL_BASELINE_FEATURES = [
+    "ws_max",
+    "ws_mean",
+    "gust_max",
+    "rh_mean",
+    "rh_min",
+    "t2m_mean",
+    "t2m_max",
+    "td_mean",
+    "sp_mean",
+    "sm_mean",
+    "soilt_mean",
+    "cloud_mean",
+    "vpd_mean",
+    "precip_sum",
+    "precip_7d",
+    *[f"{c}_lag{l}" for c in REAL_LAG_COLS for l in [1, 2, 3]],
+    *[f"{c}_diff{d}" for c in REAL_LAG_COLS for d in [1, 2]],
+    "ndvi",
+    "soil_clay_0-5cm",
+    "soil_sand_0-5cm",
+    "soil_silt_0-5cm",
+    "soil_ocs_0-5cm",
+    "soil_bdod_0-5cm",
+    "doy_sin",
+    "doy_cos",
+    "month_sin",
+    "month_cos",
+]
+
+REAL_FULL_FEATURES = REAL_BASELINE_FEATURES + ALBEDO_FEATURES

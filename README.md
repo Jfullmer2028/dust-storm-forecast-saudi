@@ -56,19 +56,21 @@ dust-storm-forecast-saudi/
 ├── .github/workflows/ci.yml # CI: unit tests + full pipeline smoke run
 ├── data/
 │   ├── synthetic/           # Pre-built test CSVs (no API keys needed)
-│   ├── raw/                 # Real downloads (ERA5 .nc, ISD, GEE exports)
+│   ├── raw/real/            # Cached keyless real downloads (gitignored)
 │   ├── processed/
-│   └── final/               # master_dataset.csv (generated)
+│   └── final/               # master_dataset[_real].csv (generated)
 ├── src/
-│   ├── acquisition.py       # NOAA ISD, GEE, ERA5, SoilGrids + synthetic generator
-│   ├── features.py          # Albedo anomaly, lags, temporal encodings
-│   ├── labeling.py          # NDDI + visibility dual-criterion labels
-│   ├── models.py            # XGBoost CV, Optuna tuning
-│   └── evaluation.py        # F₂ comparison, Wilcoxon, bootstrap, SHAP
-├── tests/                   # Pytest suite (features, labels, CV, smoke)
-├── outputs/                 # Figures and feature importance CSV
+│   ├── acquisition.py       # GEE/CDS/ISD acquisition + synthetic generator
+│   ├── real_sources.py      # Keyless real APIs (Open-Meteo/ORNL/NOAA/SoilGrids)
+│   ├── features.py          # Albedo anomaly, lags, temporal encodings, feature sets
+│   ├── labeling.py          # Dual-criterion & visibility-only labels
+│   ├── models.py            # XGBoost CV, F₂-threshold tuning, Optuna
+│   └── evaluation.py        # F₂ comparison, Wilcoxon, bootstrap, per-station, SHAP
+├── tests/                   # Pytest suite (features, labels, CV, real sources, smoke)
+├── outputs/                 # Figures + feature importance (outputs/real/ for real mode)
 └── results/
-    └── report.md            # Final results (generated)
+    ├── report.md            # Synthetic-mode results (generated)
+    └── report_real.md       # Keyless real-data results (generated)
 ```
 
 ## Tests
@@ -79,13 +81,15 @@ pytest tests/ -v
 ```
 
 The suite covers albedo-anomaly math (incl. DOY wrap-around at year end), the
-dual-criterion label, the next-day label shift, train-fold-only imputation,
-temporal-leakage-free CV splits, F₂-optimal threshold tuning, per-station F₂,
-the Wilcoxon and bootstrap statistics, a guard that the meteorological baseline
-is **never degenerate** (no 0.000 folds), and an end-to-end smoke test on the
-bundled synthetic data. CI (GitHub Actions) runs the tests on Python 3.10–3.12
-plus a full synthetic pipeline run, and uploads the report and figures as
-artifacts.
+dual-criterion and visibility-only labels, the next-day label shift,
+train-fold-only imputation, temporal-leakage-free CV splits, F₂-optimal
+threshold tuning, per-station F₂, the Wilcoxon and bootstrap statistics, a guard
+that the meteorological baseline is **never degenerate** (no 0.000 folds), the
+keyless real-source parsers (Open-Meteo aggregation, NOAA ISD visibility
+parsing, the Liang albedo / NDVI computation — all network-mocked so CI stays
+offline), and an end-to-end smoke test on the bundled synthetic data. CI (GitHub
+Actions) runs the tests on Python 3.10–3.12 plus a full synthetic pipeline run,
+and uploads the report and figures as artifacts.
 
 ## Models
 
@@ -99,9 +103,9 @@ Adds four MODIS MCD43A3 features within 200 km radius:
 - `albedo_anom_3d`, `albedo_anom_7d` — temporally smoothed anomaly
 
 ### Label definition
-A **dust event on day D+1** is predicted from features on day D. A confirmed event requires **both**:
-- MOD09A1 NDDI > 0 (8-day composite, forward-filled to daily)
-- At least one hourly visibility observation ≤ 1 000 m (NOAA ISD)
+A **dust event on day D+1** is predicted from features on day D.
+- **Synthetic / GEE path** (`label_mode="dual"`): confirmed event requires **both** MOD09A1 NDDI > 0 (8-day composite, forward-filled) **and** at least one hourly visibility ≤ 1 000 m.
+- **Keyless real path** (`label_mode="visibility"`): the **WMO dust-storm criterion** — at least one hourly visibility ≤ 1 000 m (NOAA ISD). The 8-day MODIS NDDI is too coarse and numerically unstable over bright desert to gate individual dust days, so it is dropped from labeling (NDVI is retained as a feature).
 
 ### Evaluation
 - **Primary metric:** F₂-score (β=2, recall weighted 2× precision)
@@ -110,46 +114,68 @@ A **dust event on day D+1** is predicted from features on day D. A confirmed eve
 - **Optional:** `--station-cv` for leave-one-station-out `GroupKFold`
 - **Statistics:** Wilcoxon signed-rank on per-fold F₂ differences (8 folds → significance is now attainable); bootstrap CI (5 000 resamples) on concatenated predictions; per-station F₂ breakdown
 
-## Real Data Mode
+## Real Data Mode (keyless — no accounts required)
 
-To run with live data sources, configure accounts and run:
+The default real-data path uses **only public APIs that need no account, key, or
+OAuth**, so it runs anywhere with outbound network access:
 
 ```bash
 python run_pipeline.py --mode real
 ```
 
-### Prerequisites
+No extra dependencies beyond `requirements.txt` — everything is fetched with
+`requests`. Downloads are cached under `data/raw/real/`, so re-runs are
+incremental.
 
-First install the extra acquisition dependencies:
+| Variable | Source | Endpoint | Key? |
+|----------|--------|----------|------|
+| ERA5 meteorology | **Open-Meteo** Historical Weather API | `archive-api.open-meteo.com` | No |
+| MODIS reflectance → NDVI, NDDI, **albedo** | **ORNL DAAC** MODIS subsets (MOD09A1) | `modis.ornl.gov/rst` | No |
+| Station visibility | **NOAA ISD** global-hourly CSV | `ncei.noaa.gov/data/global-hourly` | No |
+| Soil properties | **ISRIC SoilGrids** v2 | `rest.isric.org/soilgrids` | No |
+
+### How the satellite albedo is derived (keyless)
+ORNL serves MODIS **surface reflectance** (MOD09A1, 8-day, 500 m) globally
+without login. The spatial mean over a ±`albedo_km` box is converted to a
+**shortwave broadband albedo** via the **Liang (2001)** narrow-to-broadband
+coefficients (bands 1–5, 7), then turned into a DOY-climatology anomaly exactly
+as in the synthetic path. (The GEE path below instead uses native MCD43A3
+white-sky albedo; the keyless Liang proxy is what lets the project run with no
+credentials.)
+
+### Scope and cost
+MODIS is **one ORNL request per band per 8-day composite** (7 bands), so the
+live run is bounded by `config.yaml → real:` (default 3 stations, 2020 study,
+2019–2020 MODIS for the anomaly baseline, ±20 km box ≈ 15 min). Scale up with:
 
 ```bash
-pip install -r requirements-real.txt
+python run_pipeline.py --mode real \
+  --stations riyadh hafar sharurah dammam tabuk qassim arar najran \
+  --study-years 2018 2019 2020 2021 2022 \
+  --modis-years 2016 2017 2018 2019 2020 2021 2022 \
+  --albedo-km 40
 ```
 
-| Source | Account / Tool | Setup |
-|--------|----------------|-------|
-| MODIS albedo & NDVI | [Google Earth Engine](https://earthengine.google.com) | `earthengine authenticate` |
-| ERA5 reanalysis | [Copernicus CDS](https://cds.climate.copernicus.eu) | Create `~/.cdsapirc` with UID and API key |
-| Station visibility | NOAA ISD | included in `requirements-real.txt` |
-| Soil properties | SoilGrids REST | Free, no key (`requests`) |
+Real-mode results are written to `results/report_real.md` and
+`data/final/master_dataset_real.csv`.
 
-### ERA5 CDS config example (`~/.cdsapirc`)
+### Optional: Google Earth Engine + Copernicus CDS path
+For native MCD43A3 albedo and the ERA5 archive, install the extras and
+authenticate; these functions live in `src/acquisition.py`:
 
+```bash
+pip install -r requirements-real.txt   # earthengine-api, cdsapi, isd, netCDF4
+earthengine authenticate               # GEE
+# ~/.cdsapirc with your Copernicus CDS UID:key
 ```
-url: https://cds.climate.copernicus.eu/api/v2
-key: YOUR_UID:YOUR_API_KEY
-```
-
-### Notes on real data
-- ERA5 downloads are large (~several GB per station-year); allow 50+ GB disk space.
-- GEE `reduceRegion` over 200 km at 500 m may take several minutes per station; results are cached to CSV.
-- SoilGrids API is rate-limited; the pipeline sleeps 2 s between station requests.
 
 ## CLI Options
 
 ```bash
 python run_pipeline.py                  # synthetic mode (default)
-python run_pipeline.py --mode real      # fetch from external APIs
+python run_pipeline.py --mode real      # keyless real data (Open-Meteo/ORNL/NOAA/SoilGrids)
+python run_pipeline.py --mode real --stations riyadh hafar --study-years 2019 2020
+python run_pipeline.py --mode real --albedo-km 40   # wider MODIS footprint
 python run_pipeline.py --tune           # Optuna hyperparameter search (slower)
 python run_pipeline.py --station-cv     # add leave-one-station-out evaluation
 python run_pipeline.py --config my.yaml # custom config path

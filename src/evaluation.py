@@ -62,17 +62,22 @@ def evaluate_both_models(
     output_dir: str | Path = "outputs",
     xgb_params: dict | None = None,
     random_state: int = 42,
+    baseline_features: list[str] | None = None,
+    full_features: list[str] | None = None,
 ) -> tuple[dict, dict]:
     """Run CV for baseline and full models; save per-fold comparison chart."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    baseline_features = baseline_features or BASELINE_FEATURES
+    full_features = full_features or FULL_FEATURES
 
     print("=" * 55)
     print("BASELINE MODEL (no albedo anomaly)")
     print("=" * 55)
     baseline_results = run_cross_validation(
         df,
-        BASELINE_FEATURES,
+        baseline_features,
         n_splits=n_splits,
         cv_strategy="time",
         random_state=random_state,
@@ -85,7 +90,7 @@ def evaluate_both_models(
     print("=" * 55)
     full_results = run_cross_validation(
         df,
-        FULL_FEATURES,
+        full_features,
         n_splits=n_splits,
         cv_strategy="time",
         random_state=random_state,
