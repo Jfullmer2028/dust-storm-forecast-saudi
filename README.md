@@ -45,6 +45,18 @@ Expected runtime: ~3–6 minutes on a laptop (~14.5k station-days; depends on SH
 
 The baseline is a genuinely competent meteorological forecaster (no degenerate 0.000 folds), and the albedo anomaly delivers a **modest but statistically significant** incremental gain — the realistic outcome such a study should produce. Albedo helps at **every** station, with heterogeneity from +0.03 (Sharurah) to +0.12 (Riyadh).
 
+### Real-data result (keyless `--mode real`, Riyadh/Hafar/Sharurah, 2018–2020)
+
+Run end-to-end on **live observations** (Open-Meteo ERA5 + ORNL MODIS + NOAA ISD + SoilGrids), 3,285 station-days, 201 dust events (6.1%):
+
+| Model | Mean F₂ (5-fold CV) |
+|-------|---------------------|
+| Baseline (ERA5 + soil + NDVI) | **0.265** |
+| Full (+ MODIS shortwave albedo anomaly) | **0.257** |
+| **ΔF₂** | **−0.008** (Wilcoxon p = 1.0; bootstrap 95% CI [−0.035, +0.054]) |
+
+On real data the answer to the title question is, at these three stations, **no — adding satellite albedo does not significantly improve 24-hour dust forecasting** (the bootstrap CI straddles zero). It does help at southern **Sharurah** (+0.094 F₂) while being neutral-to-slightly-negative at Riyadh and Hafar — a genuinely mixed, publishable finding rather than a manufactured win. The full results are in [`results/report_real.md`](results/report_real.md). This uses a ±20 km MODIS footprint and a 1-year (2017) albedo baseline; widening both (`--albedo-km`, more `--modis-years`) is the natural next step.
+
 ## Project Structure
 
 ```
