@@ -205,6 +205,22 @@ def bootstrap_auc_ci(
     }
 
 
+def benjamini_hochberg(pvals: np.ndarray, q: float = 0.05) -> tuple[np.ndarray, np.ndarray]:
+    """Benjamini-Hochberg FDR control. Returns (reject, adjusted_pvalues)."""
+    p = np.asarray(pvals, dtype=float)
+    m = len(p)
+    order = np.argsort(p)
+    ranked = p[order]
+    # BH-adjusted p-values (monotone from the largest rank down)
+    adj = ranked * m / (np.arange(1, m + 1))
+    adj = np.minimum.accumulate(adj[::-1])[::-1]
+    adj = np.clip(adj, 0, 1)
+    out_adj = np.empty(m)
+    out_adj[order] = adj
+    reject = out_adj <= q
+    return reject, out_adj
+
+
 def run_group_ablation(
     df: pd.DataFrame,
     full_features: list[str],
@@ -214,6 +230,7 @@ def run_group_ablation(
     n_bootstrap: int = 2000,
     output_dir: str | Path = "outputs",
     full_results: dict | None = None,
+    fdr_q: float = 0.05,
 ) -> pd.DataFrame:
     """
     Quantify the incremental value of each physical driver group.
@@ -223,9 +240,10 @@ def run_group_ablation(
 
         incremental(g) = PR-AUC(all) − PR-AUC(all − g)
 
-    A paired bootstrap 95% CI entirely above zero means group g contributes
-    skill that no other group supplies — i.e. that driver carries information
-    not already present in the rest of the feature set.
+    Each group gets a paired bootstrap 95% CI and a two-sided bootstrap p-value.
+    Because one group test is run per driver, p-values are corrected for multiple
+    comparisons with **Benjamini-Hochberg FDR**; `significant_fdr` (not the raw
+    CI) is the reported call.
     """
     from src.features import build_feature_groups
     from src.models import run_cross_validation
@@ -236,7 +254,7 @@ def run_group_ablation(
     groups = build_feature_groups(full_features)
 
     print("\n" + "=" * 60)
-    print("DRIVER ABLATION — incremental PR-AUC by feature group")
+    print("DRIVER ABLATION — incremental PR-AUC by feature group (BH-FDR)")
     print("=" * 60)
 
     full_res = full_results or run_cross_validation(
@@ -261,6 +279,10 @@ def run_group_ablation(
             y_true, proba_reduced, proba_full, metric="ap",
             n_bootstrap=n_bootstrap, random_state=random_state,
         )
+        samples = cmp["samples"]
+        # Two-sided bootstrap p-value for H0: delta = 0.
+        p = 2 * min((samples <= 0).mean(), (samples >= 0).mean())
+        p = float(np.clip(p, 1.0 / len(samples), 1.0))
         rows.append(
             {
                 "group": gname,
@@ -268,23 +290,30 @@ def run_group_ablation(
                 "incremental_pr_auc": cmp["delta"],
                 "ci_lo": cmp["lo"],
                 "ci_hi": cmp["hi"],
-                "significant": cmp["lo"] > 0,
+                "p_value": p,
             }
-        )
-        print(
-            f"  {gname:<20} ΔPR-AUC={cmp['delta']:+.4f} "
-            f"[{cmp['lo']:+.4f}, {cmp['hi']:+.4f}]"
-            f"{'  *' if cmp['lo'] > 0 else ''}"
         )
 
     table = pd.DataFrame(rows).sort_values(
         "incremental_pr_auc", ascending=False
     ).reset_index(drop=True)
 
-    # Horizontal bar chart with 95% CI whiskers.
+    reject, p_adj = benjamini_hochberg(table["p_value"].values, q=fdr_q)
+    table["p_fdr"] = p_adj
+    table["significant_fdr"] = reject
+
+    for _, r in table.iterrows():
+        print(
+            f"  {r['group']:<20} ΔPR-AUC={r['incremental_pr_auc']:+.4f} "
+            f"[{r['ci_lo']:+.4f}, {r['ci_hi']:+.4f}]  "
+            f"p={r['p_value']:.3f} p_fdr={r['p_fdr']:.3f}"
+            f"{'  *' if r['significant_fdr'] else ''}"
+        )
+
+    # Horizontal bar chart with 95% CI whiskers (green = FDR-significant).
     fig, ax = plt.subplots(figsize=(8, 0.5 * len(table) + 1.5))
     y = np.arange(len(table))[::-1]
-    colors = ["#2E7D32" if s else "#9E9E9E" for s in table["significant"]]
+    colors = ["#2E7D32" if s else "#9E9E9E" for s in table["significant_fdr"]]
     err_lo = (table["incremental_pr_auc"] - table["ci_lo"]).clip(lower=0)
     err_hi = (table["ci_hi"] - table["incremental_pr_auc"]).clip(lower=0)
     ax.barh(y, table["incremental_pr_auc"], color=colors,
@@ -293,14 +322,123 @@ def run_group_ablation(
     ax.set_yticks(y)
     ax.set_yticklabels(table["group"])
     ax.set_xlabel("Incremental PR-AUC (full − without group)")
-    ax.set_title("Which drivers matter for 24-h dust onset?\n"
-                 "(green = 95% CI above zero)")
+    ax.set_title("Driver ablation for 24-h dust onset\n"
+                 f"(green = significant at BH-FDR q={fdr_q})")
     plt.tight_layout()
     plt.savefig(output_dir / "driver_ablation.png", dpi=150)
     plt.close()
 
     table.to_csv(output_dir / "driver_ablation.csv", index=False)
     return table
+
+
+def compute_naive_baselines(
+    df: pd.DataFrame,
+    full_features: list[str],
+    model_results: dict,
+    n_splits: int = 5,
+    xgb_params: dict | None = None,
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """
+    Contextualise the forecaster against naive baselines (EMBRACE-style).
+
+    Rows: no-skill (climatological base rate), persistence (dust tomorrow if dust
+    today), meteorology-only model, and the full model. PR-AUC / ROC-AUC.
+    """
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    from src.features import assign_group
+    from src.models import TARGET, run_cross_validation
+
+    d = df.sort_values(["station", "date"]).reset_index(drop=True)
+    y = d[TARGET].astype(int).values
+    base_rate = float(y.mean())
+
+    # Persistence: predict next-day event from today's event (per station).
+    persist = d.groupby("station")[TARGET].shift(1).fillna(0).astype(float).values
+    persist_ap = average_precision_score(y, persist)
+    persist_roc = roc_auc_score(y, persist)
+
+    # Meteorology-only model (drop satellite vegetation/albedo and static soil).
+    met_groups = {"wind_speed", "wind_direction", "humidity_dryness",
+                  "antecedent_moisture", "thermal_blh", "pressure", "seasonality"}
+    met_feats = [f for f in full_features if assign_group(f) in met_groups]
+    met = run_cross_validation(
+        d, met_feats, n_splits=n_splits, random_state=random_state,
+        xgb_params=xgb_params, verbose=False,
+    )
+
+    rows = [
+        {"baseline": "no-skill (base rate)", "pr_auc": base_rate, "roc_auc": 0.5},
+        {"baseline": "persistence", "pr_auc": persist_ap, "roc_auc": persist_roc},
+        {"baseline": "meteorology-only model", "pr_auc": met["mean_ap"],
+         "roc_auc": met["mean_roc"]},
+        {"baseline": "full model", "pr_auc": model_results["mean_ap"],
+         "roc_auc": model_results["mean_roc"]},
+    ]
+    return pd.DataFrame(rows)
+
+
+def seed_robustness(
+    df: pd.DataFrame,
+    full_features: list[str],
+    top_group_features: list[str],
+    seeds: list[int],
+    n_splits: int = 5,
+    xgb_params: dict | None = None,
+) -> dict[str, Any]:
+    """
+    Repeat the model and the top-driver ablation over several seeds and report
+    mean ± sd, so the headline does not hinge on a single random seed.
+    """
+    from src.models import run_cross_validation
+
+    ap, roc, top_delta = [], [], []
+    reduced = [f for f in full_features if f not in set(top_group_features)]
+    for s in seeds:
+        full_s = run_cross_validation(
+            df, full_features, n_splits=n_splits, random_state=s,
+            xgb_params=xgb_params, verbose=False,
+        )
+        red_s = run_cross_validation(
+            df, reduced, n_splits=n_splits, random_state=s,
+            xgb_params=xgb_params, verbose=False,
+        )
+        ap.append(full_s["mean_ap"])
+        roc.append(full_s["mean_roc"])
+        top_delta.append(full_s["mean_ap"] - red_s["mean_ap"])
+    return {
+        "seeds": seeds,
+        "ap_mean": float(np.mean(ap)), "ap_sd": float(np.std(ap)),
+        "roc_mean": float(np.mean(roc)), "roc_sd": float(np.std(roc)),
+        "top_delta_mean": float(np.mean(top_delta)),
+        "top_delta_sd": float(np.std(top_delta)),
+    }
+
+
+def plot_calibration(results: dict, output_dir: str | Path = "outputs") -> None:
+    """Reliability diagram for the forecast model's out-of-fold probabilities."""
+    from sklearn.calibration import calibration_curve
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    y_true = np.concatenate(results["fold_true"])
+    proba = np.concatenate(results["fold_proba"])
+    n_bins = min(10, max(3, int(y_true.sum() // 15)))
+    frac_pos, mean_pred = calibration_curve(
+        y_true, proba, n_bins=n_bins, strategy="quantile"
+    )
+    fig, ax = plt.subplots(figsize=(5.5, 5.5))
+    ax.plot([0, 1], [0, 1], "--", color="grey", label="perfect calibration")
+    ax.plot(mean_pred, frac_pos, "o-", color="#E07B39", label="forecast model")
+    ax.set_xlabel("Mean predicted probability")
+    ax.set_ylabel("Observed dust frequency")
+    ax.set_title("Reliability diagram (out-of-fold)")
+    ax.legend(loc="upper left", fontsize=9)
+    plt.tight_layout()
+    plt.savefig(output_dir / "calibration.png", dpi=150)
+    plt.close()
 
 
 def plot_pr_curve(results: dict, output_dir: str | Path = "outputs") -> None:
@@ -393,6 +531,8 @@ def write_report(
     df: pd.DataFrame,
     output_path: str | Path = "results/report.md",
     data_mode: str = "synthetic",
+    baselines_df: "pd.DataFrame | None" = None,
+    seed_robust: dict | None = None,
 ) -> None:
     """Write the markdown results report for the driver study."""
     output_path = Path(output_path)
@@ -402,6 +542,14 @@ def write_report(
     n_positive = int(df[TARGET].sum())
     pos_rate = 100 * n_positive / n_samples if n_samples else 0
     n_folds = len(model_results["fold_f2"])
+
+    seed_line = ""
+    if seed_robust is not None:
+        seed_line = (
+            f" Across {len(seed_robust['seeds'])} random seeds, PR-AUC = "
+            f"{seed_robust['ap_mean']:.3f} ± {seed_robust['ap_sd']:.3f} and "
+            f"ROC-AUC = {seed_robust['roc_mean']:.3f} ± {seed_robust['roc_sd']:.3f}."
+        )
 
     lines = [
         "# Dust-Storm Onset Forecasting — Results Report",
@@ -419,7 +567,8 @@ def write_report(
         "",
         "Out-of-fold cross-validated skill of the XGBoost forecaster. PR-AUC "
         "(average precision) is the primary metric for this rare-event problem; "
-        "ROC-AUC and F2 (at a per-fold tuned threshold) are reported alongside.",
+        "ROC-AUC and F2 (at a per-fold tuned threshold) are reported alongside."
+        + seed_line,
         "",
         "| Metric | Mean | Std |",
         "|--------|------|-----|",
@@ -438,37 +587,72 @@ def write_report(
         )
     lines.append("")
 
-    # Driver ablation — the headline analysis
-    sig = ablation_df[ablation_df["significant"]]
+    # Naive baselines (EMBRACE-style context)
+    if baselines_df is not None and not baselines_df.empty:
+        lines.extend(
+            [
+                "## Naive Baselines",
+                "",
+                "The forecaster against simple references (out-of-fold where a "
+                "model is involved):",
+                "",
+                "| Reference | PR-AUC | ROC-AUC |",
+                "|-----------|--------|---------|",
+            ]
+        )
+        for _, r in baselines_df.iterrows():
+            lines.append(
+                f"| {r['baseline']} | {r['pr_auc']:.4f} | {r['roc_auc']:.4f} |"
+            )
+        lines.append("")
+
+    # Driver ablation — the headline analysis (BH-FDR corrected)
+    sig = ablation_df[ablation_df["significant_fdr"]]
     lines.extend(
         [
-            "## Driver Ablation",
+            "## Driver Ablation (BH-FDR corrected)",
             "",
             "Incremental skill of each physical driver group: the change in "
             "PR-AUC when that group is removed and the model retrained "
-            "(model − without-group), with paired bootstrap 95% CIs on the "
-            "out-of-fold predictions. A CI entirely above zero marks a driver "
-            "that carries information not already present in the other features.",
+            "(model − without-group), with paired bootstrap 95% CIs and "
+            "two-sided bootstrap p-values. Because one test is run per driver "
+            "group, p-values are corrected for multiple comparisons with "
+            "**Benjamini-Hochberg FDR**; the corrected call (`sig.`) is the "
+            "reported result.",
             "",
-            "| Driver group | # feats | Incremental PR-AUC | 95% CI | Significant |",
-            "|--------------|---------|--------------------|--------|-------------|",
+            "| Driver group | # feats | Incremental PR-AUC | 95% CI | p | p (FDR) | sig. |",
+            "|--------------|---------|--------------------|--------|---|---------|------|",
         ]
     )
     for _, r in ablation_df.iterrows():
         lines.append(
             f"| {r['group']} | {int(r['n_features'])} | "
             f"{r['incremental_pr_auc']:+.4f} | "
-            f"[{r['ci_lo']:+.4f}, {r['ci_hi']:+.4f}] | "
-            f"{'**yes**' if r['significant'] else 'no'} |"
+            f"[{r['ci_lo']:+.4f}, {r['ci_hi']:+.4f}] | {r['p_value']:.3f} | "
+            f"{r['p_fdr']:.3f} | {'**yes**' if r['significant_fdr'] else 'no'} |"
         )
+    top_row = ablation_df.iloc[0]
     if not sig.empty:
         drivers = ", ".join(sig["group"].tolist())
-        lines += ["", f"**Driver groups with significant incremental skill:** {drivers}."]
+        lines += [
+            "",
+            f"**Driver groups significant after FDR correction:** {drivers}.",
+        ]
     else:
         lines += [
             "",
-            "No single driver group shows statistically significant incremental "
-            "skill at this sample size.",
+            f"**No driver group remains significant after FDR correction.** "
+            f"The largest incremental contribution is **{top_row['group']}** "
+            f"(ΔPR-AUC {top_row['incremental_pr_auc']:+.4f}, raw p="
+            f"{top_row['p_value']:.3f}, FDR p={top_row['p_fdr']:.3f}) — "
+            "suggestive but not confirmed at this sample size.",
+        ]
+    if seed_robust is not None:
+        lines += [
+            "",
+            f"Seed robustness of the top driver "
+            f"(ΔPR-AUC over {len(seed_robust['seeds'])} seeds): "
+            f"{seed_robust['top_delta_mean']:+.4f} ± {seed_robust['top_delta_sd']:.4f}.",
         ]
     lines.append("")
 
@@ -495,8 +679,9 @@ def write_report(
         [
             "## Figures",
             "",
-            "- `driver_ablation.png` — incremental PR-AUC by driver group",
+            "- `driver_ablation.png` — incremental PR-AUC by driver group (FDR)",
             "- `pr_curve.png` — precision–recall curve for the forecast model",
+            "- `calibration.png` — reliability diagram (out-of-fold)",
             "- `shap_importance.png` — SHAP feature importance",
             "",
             "## Conclusion",
@@ -504,39 +689,32 @@ def write_report(
         ]
     )
 
+    intro = (
+        f"The forecaster attains a cross-validated PR-AUC of "
+        f"{model_results['mean_ap']:.3f} (ROC-AUC {model_results['mean_roc']:.3f}) "
+        f"at a {pos_rate:.1f}% base rate, well above the no-skill PR-AUC of "
+        f"{pos_rate / 100:.3f}. "
+    )
     if not sig.empty:
+        drivers = ", ".join(sig["group"].tolist())
         top = sig.iloc[0]
-        intro = (
-            f"The forecaster attains a cross-validated PR-AUC of "
-            f"{model_results['mean_ap']:.3f} (ROC-AUC {model_results['mean_roc']:.3f}) "
-            f"at a {pos_rate:.1f}% base rate. "
-        )
-        if len(sig) == 1:
-            detail = (
-                f"The driver ablation identifies **{top['group']}** as the only "
-                f"feature group contributing statistically significant incremental "
-                f"skill (ΔPR-AUC {top['incremental_pr_auc']:+.4f}, 95% CI "
-                f"[{top['ci_lo']:+.4f}, {top['ci_hi']:+.4f}]). "
-            )
-        else:
-            drivers = ", ".join(sig["group"].tolist())
-            detail = (
-                f"The driver ablation identifies **{drivers}** as the feature "
-                f"groups contributing statistically significant incremental skill, "
-                f"with **{top['group']}** the strongest (ΔPR-AUC "
-                f"{top['incremental_pr_auc']:+.4f}, 95% CI [{top['ci_lo']:+.4f}, "
-                f"{top['ci_hi']:+.4f}]). "
-            )
         lines.append(
-            intro + detail + "Remaining groups carry information already present "
-            "elsewhere in the feature set."
+            intro + f"After Benjamini-Hochberg FDR correction across the driver "
+            f"groups, **{drivers}** retain{'s' if len(sig) == 1 else ''} "
+            f"statistically significant incremental skill, with **{top['group']}** "
+            f"the strongest (ΔPR-AUC {top['incremental_pr_auc']:+.4f}, FDR "
+            f"p={top['p_fdr']:.3f}). Remaining groups carry information already "
+            "present elsewhere in the feature set."
         )
     else:
         lines.append(
-            f"The forecaster attains a cross-validated PR-AUC of "
-            f"{model_results['mean_ap']:.3f} (ROC-AUC {model_results['mean_roc']:.3f}). "
-            "No individual driver group shows significant incremental skill at "
-            "this sample size; performance derives from the combined feature set."
+            intro + f"After Benjamini-Hochberg FDR correction across the driver "
+            f"groups, no single group reaches significance at this sample size; "
+            f"the strongest incremental contribution is **{top_row['group']}** "
+            f"(ΔPR-AUC {top_row['incremental_pr_auc']:+.4f}, FDR p="
+            f"{top_row['p_fdr']:.3f}), which we report as suggestive. Widening the "
+            "study (more stations/years via `--stations` / `--modis-years`) is the "
+            "natural way to confirm it."
         )
 
     output_path.write_text("\n".join(lines) + "\n")

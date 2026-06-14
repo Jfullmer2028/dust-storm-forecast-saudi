@@ -11,7 +11,7 @@
 
 ## Forecast Model Performance (TimeSeriesSplit, 8 folds)
 
-Out-of-fold cross-validated skill of the XGBoost forecaster. PR-AUC (average precision) is the primary metric for this rare-event problem; ROC-AUC and F2 (at a per-fold tuned threshold) are reported alongside.
+Out-of-fold cross-validated skill of the XGBoost forecaster. PR-AUC (average precision) is the primary metric for this rare-event problem; ROC-AUC and F2 (at a per-fold tuned threshold) are reported alongside. Across 5 random seeds, PR-AUC = 0.378 ± 0.002 and ROC-AUC = 0.845 ± 0.001.
 
 | Metric | Mean | Std |
 |--------|------|-----|
@@ -30,24 +30,37 @@ Out-of-fold cross-validated skill of the XGBoost forecaster. PR-AUC (average pre
 | 7 | 0.2549 | 0.8362 | 0.4939 |
 | 8 | 0.4222 | 0.8739 | 0.5571 |
 
-## Driver Ablation
+## Naive Baselines
 
-Incremental skill of each physical driver group: the change in PR-AUC when that group is removed and the model retrained (model − without-group), with paired bootstrap 95% CIs on the out-of-fold predictions. A CI entirely above zero marks a driver that carries information not already present in the other features.
+The forecaster against simple references (out-of-fold where a model is involved):
 
-| Driver group | # feats | Incremental PR-AUC | 95% CI | Significant |
-|--------------|---------|--------------------|--------|-------------|
-| wind_direction | 3 | +0.0505 | [+0.0326, +0.0681] | **yes** |
-| vegetation | 1 | +0.0159 | [+0.0034, +0.0278] | **yes** |
-| antecedent_moisture | 8 | +0.0059 | [-0.0047, +0.0161] | no |
-| thermal_blh | 14 | +0.0055 | [-0.0049, +0.0167] | no |
-| humidity_dryness | 7 | +0.0045 | [-0.0062, +0.0149] | no |
-| seasonality | 4 | +0.0042 | [-0.0042, +0.0124] | no |
-| soil_texture | 5 | +0.0036 | [-0.0054, +0.0130] | no |
-| wind_speed | 18 | +0.0024 | [-0.0089, +0.0142] | no |
-| pressure | 1 | -0.0015 | [-0.0097, +0.0073] | no |
-| albedo | 4 | -0.0049 | [-0.0146, +0.0043] | no |
+| Reference | PR-AUC | ROC-AUC |
+|-----------|--------|---------|
+| no-skill (base rate) | 0.0864 | 0.5000 |
+| persistence | 0.2554 | 0.7025 |
+| meteorology-only model | 0.3467 | 0.8163 |
+| full model | 0.3794 | 0.8455 |
 
-**Driver groups with significant incremental skill:** wind_direction, vegetation.
+## Driver Ablation (BH-FDR corrected)
+
+Incremental skill of each physical driver group: the change in PR-AUC when that group is removed and the model retrained (model − without-group), with paired bootstrap 95% CIs and two-sided bootstrap p-values. Because one test is run per driver group, p-values are corrected for multiple comparisons with **Benjamini-Hochberg FDR**; the corrected call (`sig.`) is the reported result.
+
+| Driver group | # feats | Incremental PR-AUC | 95% CI | p | p (FDR) | sig. |
+|--------------|---------|--------------------|--------|---|---------|------|
+| wind_direction | 3 | +0.0505 | [+0.0326, +0.0681] | 0.001 | 0.005 | **yes** |
+| vegetation | 1 | +0.0159 | [+0.0034, +0.0278] | 0.014 | 0.070 | no |
+| antecedent_moisture | 8 | +0.0059 | [-0.0047, +0.0161] | 0.293 | 0.557 | no |
+| thermal_blh | 14 | +0.0055 | [-0.0049, +0.0167] | 0.318 | 0.557 | no |
+| humidity_dryness | 7 | +0.0045 | [-0.0062, +0.0149] | 0.395 | 0.557 | no |
+| seasonality | 4 | +0.0042 | [-0.0042, +0.0124] | 0.358 | 0.557 | no |
+| soil_texture | 5 | +0.0036 | [-0.0054, +0.0130] | 0.446 | 0.557 | no |
+| wind_speed | 18 | +0.0024 | [-0.0089, +0.0142] | 0.643 | 0.714 | no |
+| pressure | 1 | -0.0015 | [-0.0097, +0.0073] | 0.749 | 0.749 | no |
+| albedo | 4 | -0.0049 | [-0.0146, +0.0043] | 0.303 | 0.557 | no |
+
+**Driver groups significant after FDR correction:** wind_direction.
+
+Seed robustness of the top driver (ΔPR-AUC over 5 seeds): +0.0531 ± 0.0034.
 
 ## Per-Station Performance
 
@@ -64,10 +77,11 @@ Incremental skill of each physical driver group: the change in PR-AUC when that 
 
 ## Figures
 
-- `driver_ablation.png` — incremental PR-AUC by driver group
+- `driver_ablation.png` — incremental PR-AUC by driver group (FDR)
 - `pr_curve.png` — precision–recall curve for the forecast model
+- `calibration.png` — reliability diagram (out-of-fold)
 - `shap_importance.png` — SHAP feature importance
 
 ## Conclusion
 
-The forecaster attains a cross-validated PR-AUC of 0.379 (ROC-AUC 0.846) at a 8.6% base rate. The driver ablation identifies **wind_direction, vegetation** as the feature groups contributing statistically significant incremental skill, with **wind_direction** the strongest (ΔPR-AUC +0.0505, 95% CI [+0.0326, +0.0681]). Remaining groups carry information already present elsewhere in the feature set.
+The forecaster attains a cross-validated PR-AUC of 0.379 (ROC-AUC 0.846) at a 8.6% base rate, well above the no-skill PR-AUC of 0.086. After Benjamini-Hochberg FDR correction across the driver groups, **wind_direction** retains statistically significant incremental skill, with **wind_direction** the strongest (ΔPR-AUC +0.0505, FDR p=0.005). Remaining groups carry information already present elsewhere in the feature set.

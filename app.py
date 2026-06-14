@@ -147,16 +147,20 @@ with tab2:
     st.subheader("Incremental skill of each driver group")
     st.caption(
         "Drop one physical driver group, retrain, and measure the change in "
-        "PR-AUC. Bars above zero with a 95% CI clear of zero are drivers that "
-        "matter. (Computed live on the synthetic model.)"
+        "PR-AUC. P-values are Benjamini-Hochberg FDR-corrected across groups; "
+        "`significant_fdr` is the corrected call. (Computed live on the "
+        "synthetic model.)"
     )
     ab = get_ablation(df, feats)
     ab = ab.sort_values("incremental_pr_auc", ascending=False)
     st.bar_chart(ab.set_index("group")["incremental_pr_auc"], horizontal=True)
+    cols = [c for c in ["group", "n_features", "incremental_pr_auc", "ci_lo",
+                        "ci_hi", "p_value", "p_fdr", "significant_fdr"]
+            if c in ab.columns]
     st.dataframe(
-        ab[["group", "n_features", "incremental_pr_auc", "ci_lo", "ci_hi", "significant"]]
-        .style.format(
-            {"incremental_pr_auc": "{:+.4f}", "ci_lo": "{:+.4f}", "ci_hi": "{:+.4f}"}
+        ab[cols].style.format(
+            {"incremental_pr_auc": "{:+.4f}", "ci_lo": "{:+.4f}",
+             "ci_hi": "{:+.4f}", "p_value": "{:.3f}", "p_fdr": "{:.3f}"}
         ),
         use_container_width=True,
         hide_index=True,
