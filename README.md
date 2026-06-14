@@ -106,7 +106,7 @@ dust-storm-forecast-saudi/
 │   ├── models.py            # XGBoost CV, PR-AUC/ROC-AUC/F₂, threshold tuning, Optuna
 │   └── evaluation.py        # Metric comparison, driver ablation, bootstrap, per-station, SHAP
 ├── tests/                   # Pytest suite (features, labels, CV, real sources, ablation, demo)
-├── outputs/                 # Figures incl. driver_ablation.png, pr_curves.png (outputs/real/ too)
+├── outputs/                 # Figures incl. driver_ablation.png, pr_curve.png, calibration.png (outputs/real/ too)
 └── results/
     ├── report.md            # Synthetic-mode results (generated)
     └── report_real.md       # Keyless real-data results (generated)
@@ -249,6 +249,7 @@ After a successful run:
 | `outputs/driver_ablation.png` | **Incremental PR-AUC by driver group (the headline chart)** |
 | `outputs/driver_ablation.csv` | Ablation table (incremental PR-AUC + CIs) |
 | `outputs/pr_curve.png` | Precision–recall curve for the forecast model |
+| `outputs/calibration.png` | Reliability diagram (out-of-fold) |
 | `outputs/shap_importance.png` | Top-20 SHAP features |
 | `data/final/master_dataset[_real].csv` | Merged feature matrix |
 | `outputs/real/…` | Same figures for the real-data run |

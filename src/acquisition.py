@@ -7,7 +7,6 @@ without external API keys or accounts.
 
 from __future__ import annotations
 
-import io
 import time
 from pathlib import Path
 from typing import Any
@@ -265,8 +264,7 @@ def era5_to_daily_features(
     df = df.rename(columns={time_col: "datetime"})
     df = df.set_index("datetime").sort_index()
 
-    # Normalise column names
-    rename = {k: v for k, v in ERA5_VARIABLE_MAP.items() if k in df.columns}
+    # Map any short ERA5 variable codes back to their canonical names.
     inv = {v: k for k, v in ERA5_VARIABLE_MAP.items()}
     for col in df.columns:
         if col in inv:

@@ -121,12 +121,13 @@ satellite/soil features add usable information at a 6.1% base rate.
 | **vegetation (NDVI)** | **+0.018** | **[+0.007, +0.037]** | 0.003 | **0.030** | **yes** |
 | antecedent moisture | +0.008 | [−0.004, +0.021] | 0.175 | 0.438 | no |
 | seasonality | +0.008 | [−0.004, +0.021] | 0.166 | 0.438 | no |
-| pressure | +0.007 | [−0.002, +0.018] | — | — | no |
-| wind direction | +0.005 | [−0.018, +0.021] | — | — | no |
-| wind speed | +0.005 | [−0.023, +0.027] | — | — | no |
-| albedo | +0.004 | [−0.015, +0.022] | — | — | no |
-| humidity / dryness | −0.002 | [−0.018, +0.012] | — | — | no |
-| soil texture | −0.003 | [−0.013, +0.007] | — | — | no |
+| pressure | +0.007 | [−0.002, +0.018] | 0.135 | 0.438 | no |
+| wind direction | +0.005 | [−0.018, +0.021] | 0.640 | 0.814 | no |
+| wind speed | +0.005 | [−0.023, +0.027] | 0.781 | 0.814 | no |
+| albedo | +0.004 | [−0.015, +0.022] | 0.585 | 0.814 | no |
+| thermal / BLH | +0.001 | [−0.012, +0.015] | 0.809 | 0.814 | no |
+| humidity / dryness | −0.002 | [−0.018, +0.012] | 0.814 | 0.814 | no |
+| soil texture | −0.003 | [−0.013, +0.007] | 0.651 | 0.814 | no |
 
 **Vegetation (NDVI) is the only driver group whose incremental contribution
 survives Benjamini-Hochberg FDR correction** (FDR p = 0.030). Lower green cover
@@ -166,6 +167,10 @@ add-one-feature test, is what makes this separation visible.
   MODIS products.
 - Absolute skill is modest (PR-AUC ≈ 0.14 at a 6% base rate); dust onset at a
   point is intrinsically hard 24 h ahead.
+- The drop-group ablation measures *incremental* skill, so a driver that is real
+  but **correlated** with others (e.g. wind speed and wind direction) can test
+  non-significant because its information is also carried elsewhere; this is a
+  conservative, not a null, statement about such drivers.
 - The synthetic results validate the *machinery*, not the geophysics.
 
 These are single CLI flags away from being widened (`--albedo-km`,

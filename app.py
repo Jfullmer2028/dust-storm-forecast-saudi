@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -33,7 +32,6 @@ from src.acquisition import (
 from src.evaluation import run_group_ablation
 from src.features import (
     FULL_FEATURES,
-    build_feature_groups,
     compute_albedo_anomaly,
 )
 from src.labeling import build_full_dataset, build_master_dataframe

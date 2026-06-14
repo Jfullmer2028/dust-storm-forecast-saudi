@@ -236,8 +236,15 @@ def tune_xgboost(
 
             m = _make_xgb_classifier(spw, params, random_state)
             m.fit(X_tr_imp, y_tr, verbose=False)
-            f2 = fbeta_score(y_te, m.predict(X_te_imp), beta=2, zero_division=0)
-            fold_scores.append(f2)
+            # Optimise the primary, threshold-free metric (PR-AUC) so the search
+            # is consistent with how the pipeline reports and tunes thresholds.
+            proba = m.predict_proba(X_te_imp)[:, 1]
+            score = (
+                average_precision_score(y_te, proba)
+                if 0 < y_te.sum() < len(y_te)
+                else 0.0
+            )
+            fold_scores.append(score)
 
         return float(np.mean(fold_scores))
 

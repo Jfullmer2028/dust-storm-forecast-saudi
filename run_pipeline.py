@@ -42,10 +42,8 @@ from src.labeling import build_full_dataset, build_master_dataframe  # noqa: E40
 from src.models import run_cross_validation, tune_xgboost  # noqa: E402
 
 
-def build_dataset_from_synthetic(config: dict) -> "pd.DataFrame":
+def build_dataset_from_synthetic(config: dict):
     """Generate/load synthetic CSVs and assemble master dataset."""
-    import pandas as pd
-
     syn_dir = Path(config["paths"]["data_synthetic"])
     final_path = Path(config["paths"]["data_final"]) / "master_dataset.csv"
 
@@ -89,7 +87,7 @@ def build_dataset_from_synthetic(config: dict) -> "pd.DataFrame":
     return master
 
 
-def build_dataset_from_real(config: dict, args: argparse.Namespace) -> "pd.DataFrame":
+def build_dataset_from_real(config: dict, args: argparse.Namespace):
     """
     Acquire real data from keyless public APIs and assemble the master dataset.
 
@@ -161,8 +159,6 @@ def build_dataset_from_real(config: dict, args: argparse.Namespace) -> "pd.DataF
         )
 
     master = build_full_dataset(station_dfs)
-    # Keep only real features that were actually produced (guards optional cols).
-    present = [c for c in REAL_FULL_FEATURES if c in master.columns]
     missing = [c for c in REAL_FULL_FEATURES if c not in master.columns]
     if missing:
         print(f"  Note: {len(missing)} real features unavailable: {missing}")
@@ -260,7 +256,6 @@ def main() -> None:
         dataset_name = "master_dataset_real.csv"
 
     random_state = config["model"]["random_state"]
-    results_dir = PROJECT_ROOT / config["paths"]["results"]
 
     xgb_params = None
     if args.tune or config["model"].get("use_optuna", False):
