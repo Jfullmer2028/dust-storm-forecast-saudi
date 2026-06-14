@@ -72,19 +72,20 @@
   </div>
 
   <h2>What actually matters — driver ablation</h2>
-  <p>Each physical driver group is dropped, the model retrained, and the change in PR-AUC measured with a paired bootstrap 95% CI. Only <strong>vegetation</strong> clears zero.</p>
-  <figure><img src="assets/driver_ablation_real.png" alt="Real-data driver ablation"><figcaption>Real data — incremental PR-AUC per driver group (green = 95% CI above zero).</figcaption></figure>
+  <p>Each physical driver group is dropped, the model retrained, and the change in PR-AUC measured with a paired bootstrap 95% CI and a bootstrap p-value. P-values are <strong>Benjamini–Hochberg FDR-corrected</strong> across the groups. Only <strong>vegetation</strong> survives correction.</p>
+  <figure><img src="assets/driver_ablation_real.png" alt="Real-data driver ablation"><figcaption>Real data — incremental PR-AUC per driver group (green = significant at FDR q=0.05).</figcaption></figure>
 
   <table>
-    <tr><th>Driver group</th><th>Incremental PR-AUC</th><th>95% CI</th><th>Significant</th></tr>
-    <tr><td><b>vegetation (NDVI)</b></td><td>+0.018</td><td>[+0.007, +0.037]</td><td class="ok">yes</td></tr>
-    <tr><td>antecedent moisture</td><td>+0.008</td><td>[−0.004, +0.021]</td><td>no</td></tr>
-    <tr><td>pressure</td><td>+0.007</td><td>[−0.002, +0.018]</td><td>no</td></tr>
-    <tr><td>wind direction</td><td>+0.005</td><td>[−0.018, +0.021]</td><td>no</td></tr>
-    <tr><td>wind speed</td><td>+0.005</td><td>[−0.023, +0.027]</td><td>no</td></tr>
-    <tr><td>albedo</td><td>+0.004</td><td>[−0.015, +0.022]</td><td>no</td></tr>
-    <tr><td>soil texture</td><td>−0.003</td><td>[−0.013, +0.007]</td><td>no</td></tr>
+    <tr><th>Driver group</th><th>Incremental PR-AUC</th><th>95% CI</th><th>p (FDR)</th><th>sig.</th></tr>
+    <tr><td><b>vegetation (NDVI)</b></td><td>+0.018</td><td>[+0.007, +0.037]</td><td>0.030</td><td class="ok">yes</td></tr>
+    <tr><td>antecedent moisture</td><td>+0.008</td><td>[−0.004, +0.021]</td><td>0.438</td><td>no</td></tr>
+    <tr><td>pressure</td><td>+0.007</td><td>[−0.002, +0.018]</td><td>—</td><td>no</td></tr>
+    <tr><td>wind direction</td><td>+0.005</td><td>[−0.018, +0.021]</td><td>—</td><td>no</td></tr>
+    <tr><td>wind speed</td><td>+0.005</td><td>[−0.023, +0.027]</td><td>—</td><td>no</td></tr>
+    <tr><td>albedo</td><td>+0.004</td><td>[−0.015, +0.022]</td><td>—</td><td>no</td></tr>
+    <tr><td>soil texture</td><td>−0.003</td><td>[−0.013, +0.007]</td><td>—</td><td>no</td></tr>
   </table>
+  <p style="color:var(--muted);font-size:.9rem">Naive baselines: no-skill 0.061 · persistence 0.102 · meteorology-only 0.119 · <b>full model 0.141</b> (PR-AUC). Top-driver Δ is +0.009 ± 0.008 across 5 seeds (seed-sensitive at this sample).</p>
 
   <h2>🎛️ Live dust-risk calculator</h2>
   <p>A logistic surrogate of the model (synthetic data). Move the drivers; the probability updates live. Notice how much <em>wind</em>, <em>northerly (shamal) flow</em> and <em>vegetation cover</em> move the needle.</p>

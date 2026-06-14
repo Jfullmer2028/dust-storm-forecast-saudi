@@ -24,14 +24,18 @@ from src.acquisition import (  # noqa: E402
     load_synthetic_station_bundle,
 )
 from src.evaluation import (  # noqa: E402
+    compute_naive_baselines,
+    plot_calibration,
     plot_feature_importance,
     plot_pr_curve,
     run_group_ablation,
+    seed_robustness,
     write_report,
 )
 from src.features import (  # noqa: E402
     FULL_FEATURES,
     REAL_FULL_FEATURES,
+    build_feature_groups,
     compute_albedo_anomaly,
 )
 from src.labeling import build_full_dataset, build_master_dataframe  # noqa: E402
@@ -292,8 +296,8 @@ def main() -> None:
             df, full_features, cv_strategy="station", random_state=random_state
         )
 
-    # --- Step 3: Driver ablation (the headline analysis) ---
-    print("\n[3/4] Driver ablation (incremental PR-AUC by group)...")
+    # --- Step 3: Driver ablation (BH-FDR), baselines, seed robustness ---
+    print("\n[3/5] Driver ablation (incremental PR-AUC, BH-FDR)...")
     ablation_df = run_group_ablation(
         df,
         full_features,
@@ -305,8 +309,27 @@ def main() -> None:
         full_results=model_results,
     )
 
-    # --- Step 4: Feature importance ---
-    print("\n[4/4] SHAP feature importance...")
+    print("[3/5] Naive baselines...")
+    baselines_df = compute_naive_baselines(
+        df, full_features, model_results, n_splits=n_splits,
+        xgb_params=xgb_params, random_state=random_state,
+    )
+
+    print("[3/5] Seed robustness...")
+    groups = build_feature_groups(full_features)
+    top_group = ablation_df.iloc[0]["group"]
+    seeds = [random_state + i for i in range(config["model"].get("n_seeds", 5))]
+    seed_robust = seed_robustness(
+        df, full_features, groups[top_group], seeds,
+        n_splits=n_splits, xgb_params=xgb_params,
+    )
+
+    # --- Step 4: Figures ---
+    print("\n[4/5] PR + calibration curves...")
+    plot_calibration(model_results, output_dir=output_dir)
+
+    # --- Step 5: Feature importance ---
+    print("\n[5/5] SHAP feature importance...")
     plot_feature_importance(
         df,
         full_features,
@@ -320,6 +343,8 @@ def main() -> None:
         df,
         output_path=report_path,
         data_mode=mode,
+        baselines_df=baselines_df,
+        seed_robust=seed_robust,
     )
 
     print("\n" + "=" * 60)

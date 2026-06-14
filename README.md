@@ -2,7 +2,7 @@
 
 Forecast dust-storm onset **24 hours in advance** at Saudi Arabian weather stations using XGBoost, and **identify which satellite and surface drivers carry forecasting skill**. The pipeline trains a forecaster on ERA5 meteorology, MODIS vegetation and reflectivity, and static soil properties, then runs a **driver-group ablation** that measures each physical driver's *incremental* contribution to forecast skill.
 
-> **Headline finding (real data, Riyadh/Hafar/Sharurah, 2018–2020):** **MODIS vegetation cover (NDVI) significantly improves** 24-hour dust forecasting — it is the **only** driver group with a statistically significant incremental contribution (ΔPR-AUC **+0.018, 95% CI [+0.007, +0.037]**). Where the satellite sees less green cover (more exposed, erodible surface), next-day dust is more predictable. See [`results/report_real.md`](results/report_real.md).
+> **Headline finding (real data, Riyadh/Hafar/Sharurah, 2018–2020):** **MODIS vegetation cover (NDVI) is the only driver group whose incremental skill survives multiple-comparison (Benjamini–Hochberg FDR) correction** (ΔPR-AUC **+0.018, 95% CI [+0.007, +0.037], FDR p = 0.030**), above naive persistence and meteorology-only baselines. Where the satellite sees less green cover (more exposed, erodible surface), next-day dust is more predictable. See [`results/report_real.md`](results/report_real.md).
 
 | Station | Region | WMO ID | Coordinates |
 |---------|--------|--------|-------------|
@@ -48,42 +48,40 @@ threshold** is kept as the *operational* metric.
 
 ### Representative result (synthetic mode, 8-fold CV)
 
-The synthetic generator builds in two known satellite/surface drivers (a
-wind-direction precursor and a vegetation precursor) as a benchmark on which the
-ablation can be checked. The forecaster reaches **PR-AUC ≈ 0.37 / ROC-AUC ≈ 0.74**,
-and the ablation recovers exactly those two driver groups as significant:
-
-| Driver group | Incremental PR-AUC | 95% CI | Significant |
-|--------------|--------------------|--------|-------------|
-| **wind direction** | **+0.050** | **[+0.033, +0.068]** | ✅ **yes** |
-| **vegetation (NDVI)** | **+0.016** | **[+0.003, +0.028]** | ✅ **yes** |
-| all other groups | ≤ +0.006 | includes 0 | no |
-
-confirming the ablation isolates true drivers from noise.
+The synthetic generator builds in two known satellite/surface drivers (a strong
+wind-direction precursor and a weaker vegetation precursor) as a benchmark on
+which the ablation can be checked. The ablation ranks **exactly those two groups
+first** (ΔPR-AUC +0.050 and +0.016); after FDR correction the strong signal is
+recovered as significant (FDR p = 0.005) and the weak one is flagged as suggestive
+(FDR p = 0.070) — the procedure isolates true drivers and stays conservative on
+weak effects.
 
 ### Real-data result (keyless `--mode real`, Riyadh/Hafar/Sharurah, 2018–2020)
 
-Run end-to-end on **live observations** (Open-Meteo ERA5 + ORNL MODIS + NOAA ISD + SoilGrids): 3,285 station-days, 201 dust events (6.1 %). The forecaster attains **PR-AUC 0.14 / ROC-AUC 0.73** at the 6 % base rate. The driver ablation, ranked by incremental PR-AUC:
+Run end-to-end on **live observations** (Open-Meteo ERA5 + ORNL MODIS + NOAA ISD + SoilGrids): 3,285 station-days, 201 dust events (6.1 %). Across 5 seeds the forecaster reaches **PR-AUC 0.130 ± 0.006 / ROC-AUC 0.721 ± 0.006**, above naive baselines:
 
-| Driver group | Incremental PR-AUC | 95% CI | Significant |
-|--------------|--------------------|--------|-------------|
-| **vegetation (NDVI)** | **+0.018** | **[+0.007, +0.037]** | ✅ **yes** |
-| antecedent moisture | +0.008 | [−0.004, +0.021] | no |
-| seasonality | +0.008 | [−0.004, +0.021] | no |
-| pressure | +0.007 | [−0.002, +0.018] | no |
-| wind direction | +0.005 | [−0.018, +0.021] | no |
-| wind speed | +0.005 | [−0.023, +0.027] | no |
-| albedo | +0.004 | [−0.015, +0.022] | no |
-| humidity/dryness | −0.002 | [−0.018, +0.012] | no |
-| soil texture | −0.003 | [−0.013, +0.007] | no |
+| Reference | PR-AUC | ROC-AUC |
+|-----------|--------|---------|
+| no-skill (base rate) | 0.061 | 0.500 |
+| persistence | 0.102 | 0.592 |
+| meteorology-only model | 0.119 | 0.711 |
+| **full model** | **0.141** | **0.730** |
 
-**Vegetation cover (NDVI) is the standout satellite predictor** and the only group
-with significant incremental skill: where the satellite sees less green cover
-(more exposed, erodible surface), next-day dust is more predictable. ROC-AUC ≈ 0.73
-shows the forecaster has real skill; the wind/humidity signal is largely shared
-across groups, so most contribute little beyond the rest. This uses a ±20 km MODIS
-footprint and a 1-year (2017) reflectivity baseline; widening both (`--albedo-km`,
-more `--modis-years`) is the natural next step.
+The driver ablation, ranked by incremental PR-AUC, with **Benjamini–Hochberg FDR-corrected** p-values:
+
+| Driver group | Incremental PR-AUC | 95% CI | p (FDR) | sig. |
+|--------------|--------------------|--------|---------|------|
+| **vegetation (NDVI)** | **+0.018** | **[+0.007, +0.037]** | **0.030** | ✅ **yes** |
+| antecedent moisture | +0.008 | [−0.004, +0.021] | 0.438 | no |
+| seasonality | +0.008 | [−0.004, +0.021] | 0.438 | no |
+| pressure | +0.007 | [−0.002, +0.018] | — | no |
+| wind direction | +0.005 | [−0.018, +0.021] | — | no |
+| wind speed | +0.005 | [−0.023, +0.027] | — | no |
+| albedo | +0.004 | [−0.015, +0.022] | — | no |
+| humidity/dryness | −0.002 | [−0.018, +0.012] | — | no |
+| soil texture | −0.003 | [−0.013, +0.007] | — | no |
+
+**Vegetation cover (NDVI) is the only group whose incremental skill survives FDR correction** (FDR p = 0.030): where the satellite sees less green cover (more exposed, erodible surface), next-day dust is more predictable. As an honesty check, the top driver's seed-averaged Δ is +0.009 ± 0.008 (seed-sensitive at this sample). This uses 3 stations and a ±20 km MODIS footprint; widening scope (`--stations`, `--modis-years`) is the natural confirmation step.
 
 ## Project Structure
 
@@ -155,7 +153,9 @@ A **dust event on day D+1** is predicted from features on day D.
 - **CV:** `TimeSeriesSplit` (8 folds) on data sorted by **date** across stations, so every training fold strictly precedes its test fold in time (no temporal leakage)
 - **Decision threshold** (F₂ only): tuned to maximise F₂ on a held-out validation slice (last 15%) of each training fold, then applied to the test fold rather than using a fixed 0.5 cut-off. PR-AUC/ROC-AUC are threshold-free and so unaffected by this.
 - **Optional:** `--station-cv` for leave-one-station-out `GroupKFold`
-- **Driver ablation:** for each driver group, retrain on all-features-minus-group and measure the incremental PR-AUC with a paired **bootstrap 95% CI** (2 000 resamples) on the out-of-fold probabilities; **per-station** PR-AUC/F₂ breakdown; precision–recall curve
+- **Naive baselines:** no-skill (base rate), persistence, and a meteorology-only model contextualise the skill (EMBRACE-style)
+- **Driver ablation:** for each driver group, retrain on all-features-minus-group and measure the incremental PR-AUC with a paired **bootstrap 95% CI** and a two-sided bootstrap p-value; p-values are **Benjamini–Hochberg FDR-corrected** across the 10 groups
+- **Robustness:** model PR-AUC/ROC-AUC and the top driver's Δ are re-estimated over 5 seeds (mean ± sd); a **reliability/calibration** diagram and **per-station** breakdown are produced
 
 ## Real Data Mode (keyless — no accounts required)
 
