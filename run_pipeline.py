@@ -24,21 +24,18 @@ from src.acquisition import (  # noqa: E402
     load_synthetic_station_bundle,
 )
 from src.evaluation import (  # noqa: E402
-    evaluate_both_models,
-    full_statistical_analysis,
     plot_feature_importance,
+    plot_pr_curve,
     run_group_ablation,
     write_report,
 )
 from src.features import (  # noqa: E402
-    BASELINE_FEATURES,
     FULL_FEATURES,
-    REAL_BASELINE_FEATURES,
     REAL_FULL_FEATURES,
     compute_albedo_anomaly,
 )
 from src.labeling import build_full_dataset, build_master_dataframe  # noqa: E402
-from src.models import tune_xgboost  # noqa: E402
+from src.models import run_cross_validation, tune_xgboost  # noqa: E402
 
 
 def build_dataset_from_synthetic(config: dict) -> "pd.DataFrame":
@@ -242,7 +239,6 @@ def main() -> None:
     print("\n[1/4] Building master dataset...")
     if mode == "synthetic":
         df = build_dataset_from_synthetic(config)
-        baseline_features = BASELINE_FEATURES
         full_features = FULL_FEATURES
         n_splits = config["model"]["n_cv_splits"]
         output_dir = PROJECT_ROOT / config["paths"]["outputs"]
@@ -250,8 +246,7 @@ def main() -> None:
         dataset_name = "master_dataset.csv"
     else:
         df = build_dataset_from_real(config, args)
-        # Use only the real features that were actually produced.
-        baseline_features = [c for c in REAL_BASELINE_FEATURES if c in df.columns]
+        # Use only the features that were actually produced.
         full_features = [c for c in REAL_FULL_FEATURES if c in df.columns]
         n_splits = config.get("real", {}).get(
             "n_cv_splits", config["model"]["n_cv_splits"]
@@ -274,43 +269,31 @@ def main() -> None:
         )
         print(f"  Best params: {xgb_params}")
 
-    # --- Step 2: Cross-validation ---
-    print("\n[2/4] Running time-series cross-validation...")
-    baseline_results, full_results = evaluate_both_models(
+    # --- Step 2: Forecast-model cross-validation ---
+    print("\n[2/4] Cross-validating the forecast model...")
+    model_results = run_cross_validation(
         df,
+        full_features,
         n_splits=n_splits,
-        output_dir=output_dir,
-        xgb_params=xgb_params,
+        cv_strategy="time",
         random_state=random_state,
-        baseline_features=baseline_features,
-        full_features=full_features,
+        xgb_params=xgb_params,
     )
+    print(
+        f"  Mean PR-AUC={model_results['mean_ap']:.4f}  "
+        f"ROC-AUC={model_results['mean_roc']:.4f}  "
+        f"F2={model_results['mean_f2']:.4f}"
+    )
+    plot_pr_curve(model_results, output_dir=output_dir)
 
     if args.station_cv:
-        from src.models import run_cross_validation
-
-        print("\n[Optional] Leave-one-station-out CV (baseline)...")
-        run_cross_validation(
-            df, baseline_features, cv_strategy="station", random_state=random_state
-        )
-        print("\n[Optional] Leave-one-station-out CV (full)...")
+        print("\n[Optional] Leave-one-station-out CV...")
         run_cross_validation(
             df, full_features, cv_strategy="station", random_state=random_state
         )
 
-    # --- Step 3: Statistical comparison ---
-    print("\n[3/4] Statistical comparison (Wilcoxon + bootstrap)...")
-    stats = full_statistical_analysis(
-        baseline_results,
-        full_results,
-        n_bootstrap=config["model"]["n_bootstrap"],
-        confidence_level=config["model"]["confidence_level"],
-        random_state=random_state,
-        output_dir=output_dir,
-    )
-
-    # --- Step 4: Driver ablation (what actually matters) ---
-    print("\n[4/5] Driver ablation (incremental PR-AUC by group)...")
+    # --- Step 3: Driver ablation (the headline analysis) ---
+    print("\n[3/4] Driver ablation (incremental PR-AUC by group)...")
     ablation_df = run_group_ablation(
         df,
         full_features,
@@ -319,10 +302,11 @@ def main() -> None:
         random_state=random_state,
         n_bootstrap=2000,
         output_dir=output_dir,
+        full_results=model_results,
     )
 
-    # --- Step 5: Feature importance ---
-    print("\n[5/5] SHAP feature importance (full model)...")
+    # --- Step 4: Feature importance ---
+    print("\n[4/4] SHAP feature importance...")
     plot_feature_importance(
         df,
         full_features,
@@ -331,13 +315,11 @@ def main() -> None:
     )
 
     write_report(
-        stats,
-        baseline_results,
-        full_results,
+        model_results,
+        ablation_df,
         df,
         output_path=report_path,
         data_mode=mode,
-        ablation_df=ablation_df,
     )
 
     print("\n" + "=" * 60)

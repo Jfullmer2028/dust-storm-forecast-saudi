@@ -14,7 +14,7 @@ def test_app_compiles():
 def test_docs_page_exists_and_references_assets():
     html = (ROOT / "docs" / "index.html").read_text()
     assert "driver_ablation_real.png" in html
-    for asset in ["driver_ablation_real.png", "pr_curves_real.png"]:
+    for asset in ["driver_ablation_real.png", "pr_curve_real.png"]:
         assert (ROOT / "docs" / "assets" / asset).exists()
 
 

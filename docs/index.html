@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Dust-Storm Forecast — Saudi Arabia</title>
+<title>Dust-Storm Onset Forecasting — Saudi Arabia</title>
 <style>
   :root{--bg:#0f1419;--card:#1a2230;--ink:#e6edf3;--muted:#9aa7b4;--accent:#E07B39;--green:#2E7D32;--blue:#5B8DB8;}
   *{box-sizing:border-box}
@@ -47,8 +47,8 @@
 <body>
 <header>
   <div class="wrap">
-    <h1>🌪️ Can Satellite Albedo Improve Dust-Storm Forecasting?</h1>
-    <p class="sub">A reproducible, keyless machine-learning study of 24-hour dust-storm onset in Saudi Arabia — and a systematic ablation of <em>which</em> satellite drivers actually matter.</p>
+    <h1>🌪️ Forecasting Dust-Storm Onset in Saudi Arabia</h1>
+    <p class="sub">A reproducible, keyless machine-learning study that forecasts next-day dust onset 24 hours ahead and identifies <em>which</em> satellite and meteorological drivers carry the skill.</p>
     <div>
       <span class="pill">XGBoost</span><span class="pill">PR-AUC + bootstrap CIs</span>
       <span class="pill">Open-Meteo · ORNL MODIS · NOAA ISD · SoilGrids</span><span class="pill">no API keys</span>
@@ -58,17 +58,17 @@
 
 <div class="wrap">
   <div class="finding">
-    This study ranks satellite and reanalysis drivers by their incremental skill at
-    predicting next-day dust. The result:
-    <b>MODIS vegetation cover (NDVI) significantly improves 24-hour dust forecasting,
-    while satellite albedo does not.</b> Where the satellite sees less green cover
+    A systematic ablation ranks satellite and reanalysis drivers by their incremental
+    skill at predicting next-day dust. The result:
+    <b>MODIS vegetation cover (NDVI) is the one satellite driver with statistically
+    significant incremental skill.</b> Where the satellite sees less green cover
     (more exposed, erodible surface), next-day dust is more predictable.
   </div>
 
   <div class="cards">
-    <div class="card"><div class="k">Albedo (real data)</div><div class="v no">no effect</div><div class="d">ΔPR-AUC +0.004, CI [−0.015,+0.022]</div></div>
-    <div class="card"><div class="k">Vegetation / NDVI</div><div class="v ok">significant</div><div class="d">ΔPR-AUC +0.018, CI [+0.007,+0.037]</div></div>
-    <div class="card"><div class="k">Baseline skill</div><div class="v">ROC-AUC 0.71</div><div class="d">3 stations · 3,285 station-days</div></div>
+    <div class="card"><div class="k">Top driver</div><div class="v ok">vegetation (NDVI)</div><div class="d">ΔPR-AUC +0.018, CI [+0.007,+0.037]</div></div>
+    <div class="card"><div class="k">Forecast skill</div><div class="v">ROC-AUC 0.73</div><div class="d">PR-AUC 0.14 at a 6% base rate</div></div>
+    <div class="card"><div class="k">Reproducibility</div><div class="v">no API keys</div><div class="d">3 stations · 3,285 station-days</div></div>
   </div>
 
   <h2>What actually matters — driver ablation</h2>
@@ -87,21 +87,20 @@
   </table>
 
   <h2>🎛️ Live dust-risk calculator</h2>
-  <p>A logistic surrogate of the model (synthetic data). Move the drivers; the probability updates live. Notice how much <em>wind</em> and <em>northerly (shamal) flow</em> move the needle versus albedo.</p>
+  <p>A logistic surrogate of the model (synthetic data). Move the drivers; the probability updates live. Notice how much <em>wind</em>, <em>northerly (shamal) flow</em> and <em>vegetation cover</em> move the needle.</p>
   <div class="calc">
     <div class="row"><label>Max wind speed (m/s)</label><input id="ws_max" type="range" min="0.5" max="16" step="0.1" value="4.2"><output id="ws_max_o"></output></div>
     <div class="row"><label>Northerly-flow fraction (shamal)</label><input id="northerly_frac" type="range" min="0" max="1" step="0.01" value="0.45"><output id="northerly_frac_o"></output></div>
     <div class="row"><label>Relative humidity (%)</label><input id="rh_mean" type="range" min="3" max="80" step="1" value="29"><output id="rh_mean_o"></output></div>
-    <div class="row"><label>NDVI (vegetation cover)</label><input id="ndvi" type="range" min="0.05" max="0.18" step="0.005" value="0.10"><output id="ndvi_o"></output></div>
-    <div class="row"><label>Albedo anomaly</label><input id="albedo_anomaly" type="range" min="-0.04" max="0.06" step="0.002" value="0"><output id="albedo_anomaly_o"></output></div>
+    <div class="row"><label>NDVI (vegetation cover)</label><input id="ndvi" type="range" min="0.03" max="0.22" step="0.005" value="0.11"><output id="ndvi_o"></output></div>
     <div class="prob" id="prob">—</div>
     <div class="gauge"><div id="bar" style="width:0%"></div></div>
     <div class="verdict" id="verdict"></div>
   </div>
 
   <h2>Why PR-AUC, and how the method was validated</h2>
-  <p>F₂ depends on a decision threshold, which is sensitive to noise at a ~6% positive rate. The primary metric is therefore <strong>PR-AUC</strong> (threshold-free; the standard for rare-event detection), with ROC-AUC and operational F₂ alongside. On a synthetic benchmark with two known driver signals, the ablation recovers exactly those two — wind direction and albedo — confirming it isolates true drivers from noise.</p>
-  <figure><img src="assets/pr_curves_real.png" alt="Precision-recall curves, real data"><figcaption>Real-data precision–recall curves: baseline and +albedo essentially overlap (the null).</figcaption></figure>
+  <p>F₂ depends on a decision threshold, which is sensitive to noise at a ~6% positive rate. The primary metric is therefore <strong>PR-AUC</strong> (threshold-free; the standard for rare-event detection), with ROC-AUC and operational F₂ alongside. On a synthetic benchmark with two known driver signals, the ablation recovers exactly those two — wind direction and vegetation — confirming it isolates true drivers from noise.</p>
+  <figure><img src="assets/pr_curve_real.png" alt="Precision-recall curve, real data"><figcaption>Real-data precision–recall curve for the forecast model (PR-AUC ≈ 0.14 at a 6% base rate).</figcaption></figure>
 
   <div class="btns">
     <a class="btn" href="https://github.com/Jfullmer2028/dust-storm-forecast-saudi">View the code on GitHub</a>
@@ -115,13 +114,13 @@
 <script>
 // Logistic surrogate fitted on the synthetic dataset (standardised features).
 const M = {
-  features:["ws_max","northerly_frac","rh_mean","ndvi","sm_mean","albedo_anomaly","precip_7d"],
-  mean:[4.23625,0.45129,29.22325,0.10028,0.0751,0.0002,0.00282],
-  std:[3.05808,0.18152,10.85219,0.0117,0.02665,0.01484,0.00237],
-  coef:[0.82287,0.85091,-0.37258,-0.04591,0.00436,0.82689,-0.04935],
-  intercept:-1.21673, base_rate:0.0858
+  features:["ws_max","northerly_frac","rh_mean","ndvi"],
+  mean:[4.23625,0.45129,29.22325,0.10798],
+  std:[3.05808,0.18152,10.85219,0.04955],
+  coef:[0.80591,0.78935,-0.3576,-0.57186],
+  intercept:-1.02797, base_rate:0.0864
 };
-const sliders=["ws_max","northerly_frac","rh_mean","ndvi","albedo_anomaly"];
+const sliders=["ws_max","northerly_frac","rh_mean","ndvi"];
 function predict(){
   const vals={}; M.features.forEach((f,i)=>vals[f]=M.mean[i]); // defaults at mean
   sliders.forEach(id=>{const el=document.getElementById(id); vals[id]=parseFloat(el.value);

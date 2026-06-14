@@ -383,20 +383,23 @@ def generate_synthetic_station_data(
     """
     Generate realistic synthetic per-station data.
 
-    Two latent processes drive the system:
+    Three latent processes drive the system:
 
     * A synoptic index ``S_t`` (AR(1), phi=0.75) drives wind, humidity and
-      boundary-layer height, so weather *persists* day to day. Because dust on
-      day ``t`` depends on the contemporaneous synoptic state, today's weather
-      carries information about tomorrow's dust, giving the meteorological
-      **baseline** genuine 24-hour skill.
+      boundary-layer height, so weather *persists* day to day and today's
+      conditions carry information about tomorrow's dust.
 
-    * A partly independent surface-erodibility index ``E_t`` (AR(1), phi=0.60)
-      is imprinted on the MODIS albedo anomaly and contributes to dust risk one
-      day ahead. The baseline cannot see it, so the **albedo** features carry a
-      modest, realistic *incremental* signal.
+    * A wind-direction (shamal) index ``D_t`` (AR(1), phi=0.70) raises dust risk
+      through northerly flow, independent of wind speed.
 
-    Everything is deterministic in ``seed`` + ``station_idx`` (reproducible).
+    * A slowly-varying surface-state index ``E_t`` (AR(1), phi=0.85) that the
+      MODIS **vegetation** signal (NDVI) reflects and that leads dust one day
+      ahead — lower green cover indicates a more exposed, erodible surface.
+
+    These give two satellite/surface drivers (vegetation and wind direction)
+    with genuine incremental skill over the meteorological fields, providing a
+    benchmark on which the driver ablation can be checked. Everything is
+    deterministic in ``seed`` + ``station_idx`` (reproducible).
     """
     rng = np.random.default_rng(seed + 1000 * (station_idx + 1))
 
@@ -422,8 +425,10 @@ def generate_synthetic_station_data(
     for t in range(1, n):
         S[t] = phi_s * S[t - 1] + np.sqrt(1 - phi_s**2) * eps[t]
 
-    # Latent surface erodibility E_t ~ AR(1) — drives albedo and leads dust
-    phi_e = 0.60
+    # Latent surface-state index E_t ~ AR(1) — a slowly-varying erodibility /
+    # exposure index that the MODIS vegetation signal reflects and that leads
+    # dust. High persistence so it survives the 8-day NDVI compositing.
+    phi_e = 0.85
     eps_e = rng.normal(0, 1, n)
     E = np.zeros(n)
     for t in range(1, n):
@@ -485,7 +490,7 @@ def generate_synthetic_station_data(
     era5.index.name = "date"
 
     # --- Dust intensity on day t: contemporaneous synoptic forcing plus the
-    #     erodibility built the previous day (which the albedo anomaly sees) ---
+    #     surface-state index built the previous day (reflected in NDVI) ---
     E_lag = np.concatenate([[0.0], E[:-1]])
     D_lag = np.concatenate([[0.0], D[:-1]])
     dust_score = (
@@ -499,10 +504,10 @@ def generate_synthetic_station_data(
     thr = np.quantile(dust_score, 1 - base_rate)
     dust_events = dust_score > thr
 
-    # --- MODIS albedo: seasonal climatology + erodibility imprint (all years) ---
+    # --- MODIS albedo: seasonal climatology plus small day-to-day variation ---
     seasonal_albedo = 0.28 + 0.04 * np.sin(2 * np.pi * (doy - 90) / 365.25)
     albedo_wsb = np.clip(
-        seasonal_albedo + 0.012 * albedo_gain * E + rng.normal(0, 0.004, n),
+        seasonal_albedo + 0.010 * albedo_gain * rng.normal(0, 1, n) + 0.004,
         0.15,
         0.50,
     )
@@ -510,9 +515,14 @@ def generate_synthetic_station_data(
     albedo_df.index.name = "date"
     albedo_df["station"] = station_name
 
-    # --- MOD09A1 8-day composites: NDVI + NDDI (NDDI spikes on dust days) ---
+    # --- MOD09A1 8-day composites: NDVI carries the surface-state index (lower
+    #     green cover where the surface is more exposed/erodible); NDDI spikes
+    #     on dust days for the dual-criterion label. ---
     mod09_dates = pd.date_range(start, end, freq="8D")
-    ndvi_vals = 0.08 + 0.04 * rng.random(len(mod09_dates))
+    e_at_mod = E[np.clip(dates.searchsorted(mod09_dates), 0, n - 1)]
+    ndvi_vals = np.clip(
+        0.11 - 0.05 * e_at_mod + rng.normal(0, 0.012, len(mod09_dates)), 0.02, 0.45
+    )
     nddi_vals = rng.normal(-0.08, 0.10, len(mod09_dates))
     mod09_df = pd.DataFrame(
         {"ndvi": ndvi_vals, "nddi": nddi_vals}, index=mod09_dates

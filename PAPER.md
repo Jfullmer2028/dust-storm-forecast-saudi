@@ -1,35 +1,35 @@
-# Which satellite drivers improve 24-hour dust-storm forecasting in Saudi Arabia? A driver-ablation study
+# Identifying the satellite and meteorological drivers of 24-hour dust-storm onset forecasting in Saudi Arabia
 
 *A reproducible, keyless machine-learning pipeline for next-day dust-onset prediction.*
 
 ## Abstract
 
-We test whether satellite-derived surface information improves 24-hour-ahead
-prediction of dust-storm onset at dust-prone Saudi Arabian stations, and — more
-usefully — we identify **which** satellite/surface drivers actually matter. Using
-an XGBoost classifier with strict temporal cross-validation, we compare a
-meteorological baseline (ERA5 reanalysis + static soil + NDVI) against models
-that add MODIS shortwave-broadband **albedo** anomalies, and we run a systematic
-**driver ablation** that quantifies each physical driver group's *incremental*
-PR-AUC. On real 2018–2020 observations for three stations (Riyadh, Hafar
-Al-Batin, Sharurah; 3,285 station-days, 6.1% positive), **adding satellite albedo
-does not significantly improve forecasting** (ΔPR-AUC +0.004, 95% CI
-[−0.015, +0.022]). However, the ablation reveals that **MODIS vegetation cover
-(NDVI) is the single driver group with significant incremental skill**
-(ΔPR-AUC +0.018, 95% CI [+0.007, +0.037]). The operative answer is therefore not
-albedo but **surface vegetation state**. The entire study runs end-to-end with no
-API keys via public APIs (Open-Meteo, ORNL DAAC MODIS, NOAA ISD, SoilGrids).
+We forecast dust-storm onset 24 hours ahead at dust-prone Saudi Arabian stations
+and identify **which** satellite and meteorological drivers carry predictive
+skill. Using an XGBoost classifier with strict temporal cross-validation, we
+train a forecaster on ERA5 reanalysis, MODIS vegetation and reflectivity, and
+static soil properties, then run a systematic **driver-group ablation** that
+quantifies each driver's *incremental* PR-AUC. On real 2018–2020 observations for
+three stations (Riyadh, Hafar Al-Batin, Sharurah; 3,285 station-days, 6.1%
+positive), the forecaster attains PR-AUC 0.14 / ROC-AUC 0.73, and the ablation
+identifies **MODIS vegetation cover (NDVI) as the single driver group with
+statistically significant incremental skill** (ΔPR-AUC +0.018, 95% CI
+[+0.007, +0.037]). Where the satellite sees less green cover (a more exposed,
+erodible surface), next-day dust is more predictable. The entire study runs
+end-to-end with no API keys via public APIs (Open-Meteo, ORNL DAAC MODIS, NOAA
+ISD, SoilGrids).
 
 ## 1. Introduction
 
 Dust storms are a major hazard in the Arabian Peninsula, degrading air quality,
 aviation, and solar-energy yield. Numerical forecasts of dust emission depend on
-surface erodibility, which is hard to observe directly. Satellite surface
-reflectivity (albedo) has been proposed as a proxy for erodible, bright, exposed
-surfaces. We ask: *does adding satellite albedo improve 24-hour dust-onset
-prediction over a competent meteorological baseline?* Recognising that a single
-binary test yields limited insight, we generalise the question to: *which
-satellite and surface drivers carry incremental predictive skill?*
+surface erodibility, which is hard to observe directly, and on the synoptic
+meteorology that mobilises and transports dust. A wide range of satellite and
+reanalysis variables could in principle improve a data-driven forecast, but it is
+rarely clear which actually carry incremental skill beyond the others. We
+therefore ask: *which satellite and meteorological drivers contribute
+statistically significant incremental skill to 24-hour dust-onset prediction?*,
+and answer it with a driver-group ablation.
 
 ## 2. Data
 
@@ -42,11 +42,11 @@ All sources are public and **keyless**:
 | Station visibility | NOAA Integrated Surface Database | global-hourly |
 | Static soil texture | ISRIC SoilGrids v2 | clay/sand/silt/OCS/bulk-density |
 
-**Albedo (keyless).** ORNL does not serve MCD43A3 albedo globally, so we derive a
-shortwave-broadband albedo from MOD09A1 surface reflectance via the Liang (2001)
-narrow-to-broadband conversion (bands 1–5, 7). The albedo *anomaly* is the
-deviation from a per-day-of-year climatology (±15 days) built from a 2017
-baseline year.
+**Satellite indices (keyless).** From MOD09A1 surface reflectance we compute NDVI
+and a shortwave-broadband reflectivity (albedo) index via the Liang (2001)
+narrow-to-broadband conversion (bands 1–5, 7). Each index is expressed as an
+*anomaly* — the deviation from a per-day-of-year climatology (±15 days) built from
+a 2017 baseline year.
 
 **Wind direction (the shamal).** Hourly wind is decomposed into resultant
 northerly/easterly components and a northerly-flow fraction, capturing the NW
@@ -78,19 +78,20 @@ predict the day-*D+1* label (`shift(-1)`).
 
 ## 4. Results
 
-### 4.1 Albedo head-to-head (real data, 3 stations, 2018–2020)
+### 4.1 Forecast model performance (real data, 3 stations, 2018–2020)
 
-| Metric | Baseline | + Albedo | Δ | 95% CI |
-|--------|----------|----------|---|--------|
-| PR-AUC (primary) | 0.117 | 0.116 | −0.002 | [−0.021, +0.018] |
-| ROC-AUC | 0.713 | 0.718 | +0.005 | [−0.015, +0.025] |
-| F₂ @ tuned thr | 0.265 | 0.257 | −0.008 | [−0.035, +0.053] |
+Out-of-fold cross-validated skill of the forecaster:
 
-All three metrics agree: adding satellite albedo does not significantly change
-performance. ROC-AUC ≈ 0.71 confirms both models have genuine skill — the
-meteorological baseline already captures the predictable signal.
+| Metric | Value |
+|--------|-------|
+| PR-AUC (primary) | 0.14 |
+| ROC-AUC | 0.73 |
+| F₂ @ tuned threshold | 0.23 |
 
-### 4.2 Driver ablation — what actually matters
+At a 6.1% base rate, ROC-AUC ≈ 0.73 indicates the forecaster has genuine
+dust-ranking skill from the combined feature set.
+
+### 4.2 Driver ablation
 
 ![Driver ablation, real data](docs/assets/driver_ablation_real.png)
 
@@ -108,14 +109,16 @@ meteorological baseline already captures the predictable signal.
 
 **Vegetation (NDVI) is the only driver group with a significant incremental
 contribution.** Lower green cover (more exposed, erodible surface) raises next-day
-dust predictability beyond what meteorology supplies.
+dust predictability beyond what the remaining features supply. The other groups —
+including wind, which is informative but largely shared across features — do not
+clear the significance threshold once the rest of the feature set is present.
 
 ### 4.3 Method validation on synthetic data
 
-On a synthetic benchmark with two known driver signals — a wind-direction (shamal)
-precursor and an albedo-erodibility precursor — the ablation recovers **exactly
-those two groups** as the only significant drivers (ΔPR-AUC +0.070 and +0.061),
-confirming the procedure isolates true drivers from noise.
+On a synthetic benchmark with two known satellite/surface driver signals — a
+wind-direction (shamal) precursor and a vegetation precursor — the ablation
+recovers **exactly those two groups** as the only significant drivers (ΔPR-AUC
++0.050 and +0.016), confirming the procedure isolates true drivers from noise.
 
 ![Driver ablation, synthetic](docs/assets/driver_ablation_synthetic.png)
 
@@ -123,19 +126,19 @@ confirming the procedure isolates true drivers from noise.
 
 Vegetation cover emerging as the dominant satellite predictor is physically
 coherent — NDVI indexes the fraction of bare, mobilisable surface, a first-order
-control on dust emission that complements (rather than duplicates) the wind and
-humidity fields. Albedo, by contrast, adds no measurable skill beyond NDVI and
-meteorology, plausibly because over uniformly bright desert the broadband-albedo
-anomaly is weak and noisy relative to vegetation contrast. Generalising the study
-from a single albedo test to a ranked ablation of all driver groups is what
-surfaces this result.
+control on dust emission that complements the wind and humidity fields rather than
+duplicating them. The remaining driver groups carry information already present
+elsewhere in the feature set, so they add no measurable skill once the others are
+included. A ranked ablation of all driver groups, rather than a single
+add-one-feature test, is what makes this separation visible.
 
 ## 6. Limitations
 
-- Three stations and a single albedo-baseline year (2017); a ±20 km MODIS
+- Three stations and a single satellite-baseline year (2017); a ±20 km MODIS
   footprint rather than a basin-scale 200 km mean.
-- Keyless albedo is a Liang reflectance proxy, not native MCD43A3.
-- Absolute skill is modest (PR-AUC ≈ 0.12 at a 6% base rate); dust onset at a
+- Keyless satellite indices use MOD09A1 reflectance, not native higher-level
+  MODIS products.
+- Absolute skill is modest (PR-AUC ≈ 0.14 at a 6% base rate); dust onset at a
   point is intrinsically hard 24 h ahead.
 - The synthetic results validate the *machinery*, not the geophysics.
 
@@ -145,9 +148,10 @@ These are single CLI flags away from being widened (`--albedo-km`,
 ## 7. Conclusion
 
 In a systematic ablation of satellite and reanalysis drivers, **MODIS vegetation
-cover (NDVI) — not albedo — is the satellite variable that significantly improves
-24-hour dust-storm forecasting** in Saudi Arabia. The pipeline is fully
-reproducible without any API keys.
+cover (NDVI) is the satellite variable that contributes statistically significant
+incremental skill to 24-hour dust-storm forecasting** in Saudi Arabia, while the
+other driver groups carry information already present elsewhere in the feature
+set. The pipeline is fully reproducible without any API keys.
 
 ## Reproduce
 

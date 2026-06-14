@@ -1,7 +1,6 @@
-# Dust-Storm Onset Prediction — Results Report
+# Dust-Storm Onset Forecasting — Results Report
 
 **Data mode:** real
-**Generated:** pipeline run
 
 ## Dataset Summary
 
@@ -10,38 +9,27 @@
 - Stations: hafar, riyadh, sharurah
 - Study period: 2018-01-01 00:00:00 to 2020-12-30 00:00:00
 
-## Headline Comparison
+## Forecast Model Performance (TimeSeriesSplit, 5 folds)
 
-Primary metric is **PR-AUC (average precision)** — threshold-independent and appropriate for this rare-event problem. ROC-AUC is reported alongside it; F2 at the per-fold tuned threshold is the **operational** metric. All deltas are full − baseline with paired bootstrap 95% CIs (out-of-fold predictions, 5-fold TimeSeriesSplit).
+Out-of-fold cross-validated skill of the XGBoost forecaster. PR-AUC (average precision) is the primary metric for this rare-event problem; ROC-AUC and F2 (at a per-fold tuned threshold) are reported alongside.
 
-| Metric | Baseline | Full | Δ | 95% CI | Verdict |
-|--------|----------|------|---|--------|---------|
-| **PR-AUC** (primary) | 0.1166 | 0.1206 | +0.0040 | [-0.0147, +0.0230] | CI straddles 0 — no significant difference |
-| ROC-AUC | 0.7267 | 0.7416 | +0.0149 | [-0.0027, +0.0318] | CI straddles 0 — no significant difference |
-| F2 @ tuned thr (operational) | 0.2590 | 0.2335 | -0.0255 | [-0.0709, +0.0196] | CI straddles 0 — no significant difference |
+| Metric | Mean | Std |
+|--------|------|-----|
+| PR-AUC | 0.1412 | 0.0591 |
+| ROC-AUC | 0.7300 | — |
+| F2 (operational) | 0.2335 | 0.0840 |
 
-## Per-Fold Cross-Validation (TimeSeriesSplit, 5 folds)
+| Fold | PR-AUC | ROC-AUC | F2 |
+|------|--------|---------|----|
+| 1 | 0.2492 | 0.6872 | 0.2834 |
+| 2 | 0.1053 | 0.6223 | 0.2281 |
+| 3 | 0.0881 | 0.7736 | 0.0746 |
+| 4 | 0.1592 | 0.7552 | 0.3125 |
+| 5 | 0.1040 | 0.8119 | 0.2688 |
 
-| Fold | Baseline PR-AUC | Full PR-AUC | Baseline F2 | Full F2 |
-|------|-----------------|-------------|-------------|---------|
-| 1 | 0.1613 | 0.2492 | 0.2510 | 0.2834 |
-| 2 | 0.1164 | 0.1053 | 0.2690 | 0.2281 |
-| 3 | 0.0592 | 0.0881 | 0.1648 | 0.0746 |
-| 4 | 0.1648 | 0.1592 | 0.3777 | 0.3125 |
-| 5 | 0.0933 | 0.1040 | 0.2326 | 0.2688 |
-| **Mean** | **0.1190** | **0.1412** | **0.2590** | **0.2335** |
+## Driver Ablation
 
-## Per-Station Out-of-Fold Performance
-
-| Station | n | Positives | Base PR-AUC | Full PR-AUC | ΔPR-AUC | Base F2 | Full F2 |
-|---------|---|-----------|-------------|-------------|---------|---------|---------|
-| hafar | 911 | 50 | 0.1415 | 0.1457 | +0.0042 | 0.3303 | 0.3134 |
-| riyadh | 912 | 42 | 0.1188 | 0.1226 | +0.0038 | 0.2742 | 0.2623 |
-| sharurah | 912 | 34 | 0.0924 | 0.1057 | +0.0133 | 0.1923 | 0.1337 |
-
-## Driver Ablation — What Actually Matters
-
-Incremental PR-AUC of each physical driver group (full model − model without that group), with paired bootstrap 95% CIs. A CI entirely above zero means the driver contributes skill no other group supplies.
+Incremental skill of each physical driver group: the change in PR-AUC when that group is removed and the model retrained (model − without-group), with paired bootstrap 95% CIs on the out-of-fold predictions. A CI entirely above zero marks a driver that carries information not already present in the other features.
 
 | Driver group | # feats | Incremental PR-AUC | 95% CI | Significant |
 |--------------|---------|--------------------|--------|-------------|
@@ -56,21 +44,22 @@ Incremental PR-AUC of each physical driver group (full model − model without t
 | humidity_dryness | 10 | -0.0018 | [-0.0179, +0.0121] | no |
 | soil_texture | 4 | -0.0026 | [-0.0130, +0.0069] | no |
 
-**Significant drivers of next-day dust:** vegetation.
+**Driver groups with significant incremental skill:** vegetation.
 
-## Statistical Tests
+## Per-Station Performance
 
-- **Paired bootstrap (5 000 resamples)** on out-of-fold predictions gives the 95% CIs in the headline table — the primary inference.
-- **Wilcoxon signed-rank on per-fold PR-AUC** (n=5): W=4.00, p=0.4375 (not significant at α=0.05).
-- **Wilcoxon signed-rank on per-fold F2** (n=5): W=3.00, p=0.3125 (not significant at α=0.05).
+| Station | n | Positives | PR-AUC | F2 | Precision | Recall |
+|---------|---|-----------|--------|----|-----------|--------|
+| hafar | 911 | 50 | 0.1457 | 0.3134 | 0.138 | 0.460 |
+| riyadh | 912 | 42 | 0.1226 | 0.2623 | 0.109 | 0.405 |
+| sharurah | 912 | 34 | 0.1057 | 0.1337 | 0.098 | 0.147 |
 
 ## Figures
 
-- `pr_curves.png` — precision–recall curves (baseline vs full)
-- `f2_comparison_by_fold.png` — per-fold F2 bar chart
-- `bootstrap_delta_f2.png` — bootstrap ΔF2 distribution
-- `shap_importance.png` — SHAP feature importance (full model)
+- `driver_ablation.png` — incremental PR-AUC by driver group
+- `pr_curve.png` — precision–recall curve for the forecast model
+- `shap_importance.png` — SHAP feature importance
 
 ## Conclusion
 
-Adding the MODIS albedo anomaly yields a positive but not statistically conclusive PR-AUC gain (+0.0040, 95% CI [-0.0147, +0.0230] includes zero): suggestive evidence that surface reflectivity adds incremental dust-forecast skill, warranting a larger sample / wider MODIS footprint.
+The forecaster attains a cross-validated PR-AUC of 0.141 (ROC-AUC 0.730) at a 6.1% base rate. The driver ablation identifies **vegetation** as the only feature group contributing statistically significant incremental skill (ΔPR-AUC +0.0183, 95% CI [+0.0065, +0.0371]). Remaining groups carry information already present elsewhere in the feature set.

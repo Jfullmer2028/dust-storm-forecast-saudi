@@ -98,7 +98,9 @@ def add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# Feature sets for baseline vs. full model
+# The model's feature set is FULL_FEATURES below. It is assembled from a
+# meteorology/soil/vegetation block plus the satellite reflectivity (albedo)
+# features, which the driver ablation then evaluates group by group.
 BASELINE_FEATURES = [
     "ws_max",
     "ws_mean",
