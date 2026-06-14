@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from scipy.stats import wilcoxon
 from sklearn.metrics import fbeta_score
 
 from src.models import TARGET
@@ -50,98 +49,6 @@ def per_station_f2(results: dict) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
-
-
-def wilcoxon_test(
-    baseline_results: dict,
-    full_results: dict,
-) -> dict[str, Any]:
-    """
-    Wilcoxon signed-rank test on paired per-fold F2 scores.
-
-    H0: median(F2_full - F2_baseline) = 0
-    """
-    d = full_results["fold_f2"] - baseline_results["fold_f2"]
-    print(f"Per-fold F2 differences: {np.round(d, 4)}")
-
-    if len(d) < 5:
-        print("Warning: fewer than 5 folds — Wilcoxon test has very low power.")
-        print("Interpret p-value cautiously; prefer bootstrap CI.")
-
-    stat, p = wilcoxon(d, zero_method="zsplit", alternative="two-sided")
-    print(f"Wilcoxon W = {stat:.2f},  p = {p:.4f}")
-    if p < 0.05:
-        print("-> Statistically significant at alpha=0.05")
-    else:
-        print("-> Not statistically significant at alpha=0.05")
-
-    return {"W": stat, "p": p, "differences": d}
-
-
-def bootstrap_f2_ci(
-    true_labels: np.ndarray,
-    baseline_preds: np.ndarray,
-    full_preds: np.ndarray,
-    n_bootstrap: int = 5000,
-    confidence_level: float = 0.95,
-    random_state: int = 42,
-    output_dir: str | Path = "outputs",
-) -> dict[str, Any]:
-    """
-    Bootstrap confidence interval for Delta F2 = F2(full) - F2(baseline).
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    rng = np.random.default_rng(seed=random_state)
-    n = len(true_labels)
-    delta_boot = np.empty(n_bootstrap)
-
-    for i in range(n_bootstrap):
-        idx = rng.integers(0, n, size=n)
-        y_b = true_labels[idx]
-        yp_bas = baseline_preds[idx]
-        yp_ful = full_preds[idx]
-
-        f2_bas = fbeta_score(y_b, yp_bas, beta=2, zero_division=0)
-        f2_ful = fbeta_score(y_b, yp_ful, beta=2, zero_division=0)
-        delta_boot[i] = f2_ful - f2_bas
-
-    alpha = 1 - confidence_level
-    lo = float(np.percentile(delta_boot, 100 * alpha / 2))
-    hi = float(np.percentile(delta_boot, 100 * (1 - alpha / 2)))
-    point_estimate = float(np.median(delta_boot))
-
-    print(
-        f"Bootstrap Delta F2 ({int(confidence_level * 100)}% CI): "
-        f"{point_estimate:+.4f}  [{lo:+.4f}, {hi:+.4f}]"
-    )
-    if lo > 0:
-        print("-> CI entirely above 0: full model is significantly better.")
-    elif hi < 0:
-        print("-> CI entirely below 0: baseline model is significantly better.")
-    else:
-        print("-> CI straddles 0: no significant difference detected.")
-
-    fig, ax = plt.subplots(figsize=(7, 3.5))
-    ax.hist(delta_boot, bins=60, color="#5B8DB8", alpha=0.75, edgecolor="white")
-    ax.axvline(0, color="black", linestyle="--", linewidth=1.2, label="No difference")
-    ax.axvline(lo, color="#E07B39", linestyle=":", label=f"{int(confidence_level * 100)}% CI")
-    ax.axvline(hi, color="#E07B39", linestyle=":")
-    ax.axvline(point_estimate, color="#C03B2B", linewidth=1.8, label="Median Delta F2")
-    ax.set_xlabel("Delta F2 (full - baseline)")
-    ax.set_title("Bootstrap Distribution of F2 Improvement")
-    ax.legend(fontsize=8)
-    plt.tight_layout()
-    plt.savefig(output_dir / "bootstrap_delta_f2.png", dpi=150)
-    plt.close()
-
-    return {
-        "point": point_estimate,
-        "lo": lo,
-        "hi": hi,
-        "samples": delta_boot,
-    }
 
 
 def bootstrap_auc_ci(
@@ -425,7 +332,11 @@ def plot_calibration(results: dict, output_dir: str | Path = "outputs") -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     y_true = np.concatenate(results["fold_true"])
     proba = np.concatenate(results["fold_proba"])
-    n_bins = min(10, max(3, int(y_true.sum() // 15)))
+    n_pos = int(y_true.sum())
+    if n_pos < 15:  # too few events for a meaningful reliability diagram
+        print(f"  [calibration] only {n_pos} positives — skipping reliability plot")
+        return
+    n_bins = int(np.clip(n_pos // 15, 3, 10))
     frac_pos, mean_pred = calibration_curve(
         y_true, proba, n_bins=n_bins, strategy="quantile"
     )

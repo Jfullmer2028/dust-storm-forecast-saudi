@@ -1,14 +1,12 @@
-"""Tests for evaluation: per-station F2, Wilcoxon test, bootstrap CI."""
+"""Tests for evaluation: per-station F2, bootstrap AUC CI, driver ablation."""
 
 import numpy as np
 import pandas as pd
 
 from src.evaluation import (
     bootstrap_auc_ci,
-    bootstrap_f2_ci,
     per_station_f2,
     run_group_ablation,
-    wilcoxon_test,
 )
 
 
@@ -107,31 +105,24 @@ class TestDriverAblation:
         assert wind > soil  # the true driver contributes more than noise
         assert (tmp_path / "driver_ablation.png").exists()
 
-
-class TestWilcoxon:
-    def test_consistent_improvement_flagged(self, capsys):
-        baseline = _fake_results(
-            [0.40, 0.42, 0.38, 0.41, 0.39, 0.43, 0.40, 0.37], [], []
+    def test_ablation_has_fdr_columns(self, tmp_path):
+        rng = np.random.default_rng(1)
+        dates = pd.date_range("2018-01-01", periods=400, freq="D")
+        rows = []
+        for st in ["a", "b"]:
+            sig = rng.normal(0, 1, len(dates))
+            y = (sig + rng.normal(0, 0.5, len(dates)) > 1.0).astype(int)
+            rows.append(pd.DataFrame({
+                "date": dates, "station": st, "ws_max": sig,
+                "rh_mean": rng.normal(0, 1, len(dates)),
+                "dust_event_next_day": y,
+            }))
+        df = pd.concat(rows, ignore_index=True)
+        table = run_group_ablation(
+            df, ["ws_max", "rh_mean"], n_splits=3,
+            xgb_params={"n_estimators": 40}, n_bootstrap=300, output_dir=tmp_path,
         )
-        full = _fake_results(
-            [0.50, 0.51, 0.49, 0.52, 0.48, 0.53, 0.50, 0.47], [], []
-        )
-        out = wilcoxon_test(baseline, full)
-        # 8 consistently positive differences -> significant (min p = 2/256)
-        assert out["p"] < 0.05
-
-
-class TestBootstrap:
-    def test_ci_above_zero_when_full_better(self, tmp_path):
-        rng = np.random.default_rng(0)
-        n = 2000
-        y_true = rng.integers(0, 2, n)
-        # Full predictions match truth more often than baseline
-        full_preds = np.where(rng.random(n) < 0.9, y_true, 1 - y_true)
-        base_preds = np.where(rng.random(n) < 0.6, y_true, 1 - y_true)
-        out = bootstrap_f2_ci(
-            y_true, base_preds, full_preds,
-            n_bootstrap=500, output_dir=tmp_path,
-        )
-        assert out["lo"] <= out["point"] <= out["hi"]
-        assert out["lo"] > 0  # full clearly better
+        for col in ("p_value", "p_fdr", "significant_fdr"):
+            assert col in table.columns
+        # FDR-adjusted p is never smaller than the raw p.
+        assert (table["p_fdr"] >= table["p_value"] - 1e-9).all()
