@@ -136,13 +136,25 @@ def run_cross_validation(
         model = _make_xgb_classifier(spw, xgb_params, random_state)
         model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
 
-        # Pick the probability threshold that maximises F2 on the validation
-        # slice, then apply it to the held-out test fold (rather than a fixed
-        # 0.5 cut-off). PR-AUC and ROC-AUC remain threshold-free.
-        val_proba = model.predict_proba(X_val)[:, 1]
-        threshold = optimal_f2_threshold(y_val, val_proba, beta=2.0)
+        # `scale_pos_weight` inflates raw probabilities, so Platt-calibrate them
+        # on the held-out validation slice (monotonic -> PR-AUC/ROC-AUC are
+        # unchanged, but the probability *values* become honest for Brier /
+        # reliability). Fall back to raw probabilities if the slice is degenerate.
+        val_proba_raw = model.predict_proba(X_val)[:, 1]
+        test_proba_raw = model.predict_proba(X_test_imp)[:, 1]
+        if 0 < y_val.sum() < len(y_val):
+            from sklearn.linear_model import LogisticRegression
 
-        y_proba = model.predict_proba(X_test_imp)[:, 1]
+            cal = LogisticRegression(C=1e6, solver="lbfgs").fit(
+                val_proba_raw.reshape(-1, 1), y_val
+            )
+            val_proba = cal.predict_proba(val_proba_raw.reshape(-1, 1))[:, 1]
+            y_proba = cal.predict_proba(test_proba_raw.reshape(-1, 1))[:, 1]
+        else:
+            val_proba, y_proba = val_proba_raw, test_proba_raw
+
+        # Pick the F2-optimal threshold on the (calibrated) validation slice.
+        threshold = optimal_f2_threshold(y_val, val_proba, beta=2.0)
         y_pred = (y_proba >= threshold).astype(int)
 
         f2 = fbeta_score(y_test, y_pred, beta=2, zero_division=0)

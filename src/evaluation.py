@@ -580,9 +580,16 @@ def write_report(
                 f"on {100 * o['fpr_at_recall50']:.0f}% of calm days "
                 f"(precision {o['precision_at_recall50']:.2f} at a "
                 f"{100 * o['base_rate']:.1f}% base rate — a "
-                f"{o['precision_at_recall50'] / o['base_rate']:.1f}× lift over "
-                "random). The positive Brier Skill Score means the calibrated "
-                "probabilities are sharper than a climatology forecast.",
+                f"{o['precision_at_recall50'] / max(o['base_rate'], 1e-9):.1f}× "
+                "lift over random). "
+                + (
+                    "The calibrated probabilities are sharper than a climatology "
+                    "forecast (positive Brier Skill Score)."
+                    if o["brier_skill_score"] > 0
+                    else "The Brier Skill Score is not above climatology, so the "
+                    "probabilities add ranking value but limited probabilistic "
+                    "sharpness over the base rate."
+                ),
                 "",
             ]
         )
