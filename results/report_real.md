@@ -4,28 +4,29 @@
 
 ## Dataset Summary
 
-- Total samples: 3,285
-- Positive (dust event next day): 201 (6.1%)
-- Stations: hafar, riyadh, sharurah
+- Total samples: 6,570
+- Positive (dust event next day): 367 (5.6%)
+- Stations: arar, dammam, hafar, riyadh, sharurah, tabuk
 - Study period: 2018-01-01 00:00:00 to 2020-12-30 00:00:00
 
-## Forecast Model Performance (TimeSeriesSplit, 5 folds)
+## Forecast Model Performance (TimeSeriesSplit, 6 folds)
 
-Out-of-fold cross-validated skill of the XGBoost forecaster. PR-AUC (average precision) is the primary metric for this rare-event problem; ROC-AUC and F2 (at a per-fold tuned threshold) are reported alongside. Across 5 random seeds, PR-AUC = 0.130 ± 0.006 and ROC-AUC = 0.721 ± 0.006.
+Out-of-fold cross-validated skill of the XGBoost forecaster. PR-AUC (average precision) is the primary metric for this rare-event problem; ROC-AUC and F2 (at a per-fold tuned threshold) are reported alongside. Across 5 random seeds, PR-AUC = 0.112 ± 0.009 and ROC-AUC = 0.668 ± 0.023.
 
 | Metric | Mean | Std |
 |--------|------|-----|
-| PR-AUC | 0.1412 | 0.0591 |
-| ROC-AUC | 0.7300 | — |
-| F2 (operational) | 0.2335 | 0.0840 |
+| PR-AUC | 0.1253 | 0.0429 |
+| ROC-AUC | 0.6860 | — |
+| F2 (operational) | 0.1748 | 0.1071 |
 
 | Fold | PR-AUC | ROC-AUC | F2 |
 |------|--------|---------|----|
-| 1 | 0.2492 | 0.6872 | 0.2834 |
-| 2 | 0.1053 | 0.6223 | 0.2281 |
-| 3 | 0.0881 | 0.7736 | 0.0746 |
-| 4 | 0.1592 | 0.7552 | 0.3125 |
-| 5 | 0.1040 | 0.8119 | 0.2688 |
+| 1 | 0.1216 | 0.6449 | 0.0940 |
+| 2 | 0.1185 | 0.6577 | 0.2745 |
+| 3 | 0.0972 | 0.6405 | 0.1415 |
+| 4 | 0.0602 | 0.6259 | 0.0000 |
+| 5 | 0.1944 | 0.7367 | 0.3073 |
+| 6 | 0.1599 | 0.8103 | 0.2312 |
 
 ## Naive Baselines
 
@@ -33,10 +34,24 @@ The forecaster against simple references (out-of-fold where a model is involved)
 
 | Reference | PR-AUC | ROC-AUC |
 |-----------|--------|---------|
-| no-skill (base rate) | 0.0612 | 0.5000 |
-| persistence | 0.1016 | 0.5919 |
-| meteorology-only model | 0.1185 | 0.7108 |
-| full model | 0.1412 | 0.7300 |
+| no-skill (base rate) | 0.0559 | 0.5000 |
+| persistence | 0.1000 | 0.5974 |
+| meteorology-only model | 0.1079 | 0.6874 |
+| full model | 0.1253 | 0.6860 |
+
+## Operational Evaluation
+
+Judging the probabilities as a warning system (out-of-fold):
+
+| Quantity | Value |
+|----------|-------|
+| Brier score | 0.0439 |
+| Brier Skill Score (vs climatology) | +0.012 |
+| Recall at precision ≥ 0.30 | 0.04 |
+| Precision at recall = 0.50 | 0.06 |
+| False-alarm rate at recall = 0.50 | 0.38 |
+
+To catch **half of all dust days**, the model issues warnings on 38% of calm days (precision 0.06 at a 4.7% base rate — a 1.3× lift over random). The calibrated probabilities are sharper than a climatology forecast (positive Brier Skill Score).
 
 ## Driver Ablation (BH-FDR corrected)
 
@@ -44,28 +59,31 @@ Incremental skill of each physical driver group: the change in PR-AUC when that 
 
 | Driver group | # feats | Incremental PR-AUC | 95% CI | p | p (FDR) | sig. |
 |--------------|---------|--------------------|--------|---|---------|------|
-| vegetation | 1 | +0.0183 | [+0.0065, +0.0371] | 0.003 | 0.030 | **yes** |
-| antecedent_moisture | 8 | +0.0079 | [-0.0037, +0.0211] | 0.175 | 0.438 | no |
-| seasonality | 4 | +0.0078 | [-0.0038, +0.0209] | 0.166 | 0.438 | no |
-| pressure | 1 | +0.0069 | [-0.0021, +0.0180] | 0.135 | 0.438 | no |
-| wind_direction | 3 | +0.0051 | [-0.0184, +0.0213] | 0.640 | 0.814 | no |
-| wind_speed | 13 | +0.0046 | [-0.0229, +0.0268] | 0.781 | 0.814 | no |
-| albedo | 4 | +0.0040 | [-0.0145, +0.0224] | 0.585 | 0.814 | no |
-| thermal_blh | 8 | +0.0011 | [-0.0118, +0.0147] | 0.809 | 0.814 | no |
-| humidity_dryness | 10 | -0.0018 | [-0.0179, +0.0121] | 0.814 | 0.814 | no |
-| soil_texture | 4 | -0.0026 | [-0.0130, +0.0069] | 0.651 | 0.814 | no |
+| humidity_dryness | 10 | +0.0364 | [+0.0149, +0.0650] | 0.001 | 0.005 | **yes** |
+| vegetation | 1 | +0.0249 | [+0.0062, +0.0494] | 0.008 | 0.027 | **yes** |
+| seasonality | 4 | +0.0231 | [+0.0065, +0.0444] | 0.001 | 0.005 | **yes** |
+| soil_texture | 4 | +0.0168 | [+0.0021, +0.0364] | 0.022 | 0.055 | no |
+| wind_speed | 13 | +0.0159 | [-0.0050, +0.0399] | 0.136 | 0.170 | no |
+| antecedent_moisture | 10 | +0.0159 | [-0.0022, +0.0396] | 0.084 | 0.157 | no |
+| albedo | 4 | +0.0143 | [-0.0023, +0.0369] | 0.094 | 0.157 | no |
+| thermal_blh | 8 | +0.0140 | [-0.0034, +0.0365] | 0.116 | 0.166 | no |
+| pressure | 1 | +0.0077 | [-0.0068, +0.0228] | 0.310 | 0.344 | no |
+| wind_direction | 3 | -0.0011 | [-0.0161, +0.0157] | 0.873 | 0.873 | no |
 
-**Driver groups significant after FDR correction:** vegetation.
+**Driver groups significant after FDR correction:** humidity_dryness, vegetation, seasonality.
 
-Seed robustness of the top driver (ΔPR-AUC over 5 seeds): +0.0091 ± 0.0075.
+Seed robustness of the top driver (ΔPR-AUC over 5 seeds): +0.0228 ± 0.0108.
 
 ## Per-Station Performance
 
 | Station | n | Positives | PR-AUC | F2 | Precision | Recall |
 |---------|---|-----------|--------|----|-----------|--------|
-| hafar | 911 | 50 | 0.1457 | 0.3134 | 0.138 | 0.460 |
-| riyadh | 912 | 42 | 0.1226 | 0.2623 | 0.109 | 0.405 |
-| sharurah | 912 | 34 | 0.1057 | 0.1337 | 0.098 | 0.147 |
+| arar | 938 | 47 | 0.1172 | 0.2404 | 0.088 | 0.426 |
+| dammam | 938 | 55 | 0.1143 | 0.2222 | 0.080 | 0.400 |
+| hafar | 938 | 56 | 0.1129 | 0.2326 | 0.088 | 0.393 |
+| riyadh | 938 | 47 | 0.1437 | 0.2550 | 0.087 | 0.489 |
+| sharurah | 938 | 36 | 0.1034 | 0.2332 | 0.080 | 0.444 |
+| tabuk | 938 | 21 | 0.0441 | 0.1373 | 0.041 | 0.333 |
 
 ## Figures
 
@@ -76,4 +94,4 @@ Seed robustness of the top driver (ΔPR-AUC over 5 seeds): +0.0091 ± 0.0075.
 
 ## Conclusion
 
-The forecaster attains a cross-validated PR-AUC of 0.141 (ROC-AUC 0.730) at a 6.1% base rate, well above the no-skill PR-AUC of 0.061. After Benjamini-Hochberg FDR correction across the driver groups, **vegetation** retains statistically significant incremental skill, with **vegetation** the strongest (ΔPR-AUC +0.0183, FDR p=0.030). Remaining groups carry information already present elsewhere in the feature set.
+The forecaster attains a cross-validated PR-AUC of 0.125 (ROC-AUC 0.686) at a 5.6% base rate, well above the no-skill PR-AUC of 0.056. After Benjamini-Hochberg FDR correction across the driver groups, **humidity_dryness, vegetation, seasonality** retain statistically significant incremental skill, with **humidity_dryness** the strongest (ΔPR-AUC +0.0364, FDR p=0.005). Remaining groups carry information already present elsewhere in the feature set.
