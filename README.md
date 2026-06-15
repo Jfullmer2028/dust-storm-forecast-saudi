@@ -154,7 +154,8 @@ A **dust event on day D+1** is predicted from features on day D.
 - **Decision threshold** (F₂ only): tuned to maximise F₂ on a held-out validation slice (last 15%) of each training fold, then applied to the test fold rather than using a fixed 0.5 cut-off. PR-AUC/ROC-AUC are threshold-free and so unaffected by this.
 - **Optional:** `--station-cv` for leave-one-station-out `GroupKFold`
 - **Naive baselines:** no-skill (base rate), persistence, and a meteorology-only model contextualise the skill (EMBRACE-style)
-- **Driver ablation:** for each driver group, retrain on all-features-minus-group and measure the incremental PR-AUC with a paired **bootstrap 95% CI** and a two-sided bootstrap p-value; p-values are **Benjamini–Hochberg FDR-corrected** across the 10 groups
+- **Operational evaluation:** the probabilities are judged as a *warning system* — Brier Skill Score vs climatology, recall at usable precision, and the false-alarm rate / precision-lift at the point that catches half of all dust days
+- **Driver ablation:** for each driver group, retrain on all-features-minus-group and measure the incremental PR-AUC with a paired **bootstrap 95% CI** and a two-sided bootstrap p-value; p-values are **Benjamini–Hochberg FDR-corrected** across the driver groups
 - **Robustness:** model PR-AUC/ROC-AUC and the top driver's Δ are re-estimated over 5 seeds (mean ± sd); a **reliability/calibration** diagram and **per-station** breakdown are produced
 
 ## Real Data Mode (keyless — no accounts required)

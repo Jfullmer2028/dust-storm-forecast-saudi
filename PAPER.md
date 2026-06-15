@@ -84,6 +84,10 @@ predict the day-*D+1* label (`shift(-1)`).
 - **Naive baselines.** Skill is contextualised against a no-skill (climatological
   base-rate) reference, a persistence baseline (dust tomorrow if dust today), and
   a meteorology-only model.
+- **Operational evaluation.** The probabilities are also judged as a warning
+  system: Brier Skill Score against a climatology forecast, the recall achievable
+  at a usable precision (≥ 0.30), and the precision-lift / false-alarm rate at the
+  operating point that catches half of all dust days.
 - **Seed robustness.** The model and the top driver's incremental PR-AUC are
   re-estimated over five random seeds (mean ± sd reported).
 - **Driver ablation.** Features are bucketed into physical groups (wind speed,

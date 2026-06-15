@@ -119,11 +119,11 @@ soil_properties:
 # bounded by these settings. Override on the CLI with --stations / --study-years
 # / --modis-years / --albedo-km. Defaults give a tractable, genuinely-real run.
 real:
-  stations: [riyadh, hafar, sharurah]
+  stations: [riyadh, hafar, sharurah, dammam, arar, tabuk]
   study_years: [2018, 2019, 2020]
   modis_years: [2017, 2018, 2019, 2020]  # 2017 forms the albedo anomaly baseline
   albedo_km: 20                          # +/- box half-width for the MODIS mean
-  n_cv_splits: 5
+  n_cv_splits: 6
 
 synthetic:
   enabled: true

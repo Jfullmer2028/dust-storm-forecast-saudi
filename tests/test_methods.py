@@ -7,6 +7,7 @@ import pandas as pd
 from src.evaluation import (
     benjamini_hochberg,
     compute_naive_baselines,
+    operational_metrics,
     plot_calibration,
     seed_robustness,
 )
@@ -92,6 +93,30 @@ class TestSeedRobustness:
             assert k in out
         assert out["ap_sd"] >= 0 and out["roc_sd"] >= 0
         assert 0.0 <= out["ap_mean"] <= 1.0
+
+
+class TestOperationalMetrics:
+    def test_keys_and_skillful_case(self):
+        rng = np.random.default_rng(0)
+        n = 4000
+        y = (rng.random(n) < 0.06).astype(int)
+        # Probabilities clearly informative about the label.
+        p = np.clip(0.06 + 0.4 * y + rng.normal(0, 0.15, n), 0, 1)
+        o = operational_metrics({"fold_true": [y], "fold_proba": [p]})
+        for k in ("base_rate", "brier", "brier_skill_score",
+                  "recall_at_precision30", "precision_at_recall50",
+                  "fpr_at_recall50"):
+            assert k in o
+        assert 0.0 <= o["fpr_at_recall50"] <= 1.0
+        assert o["brier_skill_score"] > 0  # sharper than climatology here
+
+    def test_no_skill_has_nonpositive_bss(self):
+        rng = np.random.default_rng(1)
+        n = 2000
+        y = (rng.random(n) < 0.1).astype(int)
+        p = np.full(n, 0.1)  # constant climatology forecast
+        o = operational_metrics({"fold_true": [y], "fold_proba": [p]})
+        assert o["brier_skill_score"] <= 1e-6  # no skill over climatology
 
 
 class TestCalibrationPlot:

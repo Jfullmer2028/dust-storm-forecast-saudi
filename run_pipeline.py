@@ -25,6 +25,7 @@ from src.acquisition import (  # noqa: E402
 )
 from src.evaluation import (  # noqa: E402
     compute_naive_baselines,
+    operational_metrics,
     plot_calibration,
     plot_feature_importance,
     plot_pr_curve,
@@ -319,6 +320,9 @@ def main() -> None:
         n_splits=n_splits, xgb_params=xgb_params,
     )
 
+    print("[3/5] Operational metrics...")
+    operational = operational_metrics(model_results)
+
     # --- Step 4: Figures ---
     print("\n[4/5] PR + calibration curves...")
     plot_calibration(model_results, output_dir=output_dir)
@@ -340,6 +344,7 @@ def main() -> None:
         data_mode=mode,
         baselines_df=baselines_df,
         seed_robust=seed_robust,
+        operational=operational,
     )
 
     print("\n" + "=" * 60)
