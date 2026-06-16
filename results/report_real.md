@@ -28,6 +28,20 @@ Out-of-fold cross-validated skill of the XGBoost forecaster. PR-AUC (average pre
 | 5 | 0.1944 | 0.7367 | 0.3073 |
 | 6 | 0.1599 | 0.8103 | 0.2312 |
 
+## Generalization to Unseen Stations (leave-one-station-out)
+
+Each station is held out entirely while the model trains on the others, so this measures transfer to a *new* location. PR-AUC per held-out station:
+
+| Held-out station | PR-AUC | ROC-AUC |
+|------------------|--------|---------|
+| tabuk | 0.0857 | 0.6308 |
+| sharurah | 0.1012 | 0.6573 |
+| riyadh | 0.2199 | 0.8162 |
+| hafar | 0.2689 | 0.7794 |
+| dammam | 0.1463 | 0.7014 |
+| arar | 0.1345 | 0.7297 |
+| **mean** | **0.1594** | **0.7191** |
+
 ## Naive Baselines
 
 The forecaster against simple references (out-of-fold where a model is involved):

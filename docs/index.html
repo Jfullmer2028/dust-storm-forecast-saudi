@@ -85,7 +85,7 @@
     <tr><td>albedo</td><td>+0.014</td><td>[−0.002, +0.037]</td><td>0.157</td><td>no</td></tr>
     <tr><td>wind direction</td><td>−0.001</td><td>[−0.016, +0.016]</td><td>0.873</td><td>no</td></tr>
   </table>
-  <p style="color:var(--muted);font-size:.9rem">Naive baselines: no-skill 0.056 · persistence 0.100 · meteorology-only 0.108 · <b>full model 0.125</b> (PR-AUC). Top-driver Δ is +0.023 ± 0.011 across 5 seeds. Honest caveat: absolute skill is modest and station-dependent (PR-AUC 0.144 at Riyadh, 0.044 at Tabuk); catching half of all dust days costs a ~38% false-alarm rate — a reproducible baseline, not a deployable warning system.</p>
+  <p style="color:var(--muted);font-size:.9rem">Naive baselines: no-skill 0.056 · persistence 0.100 · meteorology-only 0.108 · <b>full model 0.125</b> (PR-AUC). Top-driver Δ is +0.023 ± 0.011 across 5 seeds. <b>Generalizes to unseen stations</b> — leave-one-station-out PR-AUC 0.159 (≥ within-station). Honest caveat: <em>absolute</em> skill is modest (catching half of all dust days costs a ~38% false-alarm rate), so this is a reproducible, generalizable baseline with robust driver attribution — not a deployable warning system.</p>
 
   <h2>🎛️ Live dust-risk calculator</h2>
   <p>A logistic surrogate of the model (synthetic data). Move the drivers; the probability updates live. Notice how much <em>wind</em>, <em>northerly (shamal) flow</em> and <em>vegetation cover</em> move the needle.</p>

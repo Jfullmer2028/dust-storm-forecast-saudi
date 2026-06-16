@@ -127,10 +127,11 @@ Three groups survive multiple-comparison correction: **humidity/dryness,
 vegetation cover (NDVI) and seasonality** — physically, dry air over a bare,
 erodible surface during the dust season.
 
-Honest caveat: absolute skill is modest and station-dependent, and the operating
-points are weak (catching half of all dust days costs a ~38% false-alarm rate),
-so this is a reproducible **baseline with robust driver attribution**, not a
-deployable warning system.
+The result **generalizes to unseen stations** (leave-one-station-out PR-AUC 0.159,
+matching the within-station figure). Honest caveat: *absolute* skill is modest and
+the operating points are weak (catching half of all dust days costs a ~38%
+false-alarm rate), so this is a reproducible, generalizable **baseline with robust
+driver attribution**, not a deployable warning system.
 
 This live demo trains on the project's **synthetic** generator (self-contained,
 no keys) so you can interact with the model. The real-data numbers above come

@@ -286,10 +286,17 @@ def main() -> None:
     )
     plot_pr_curve(model_results, output_dir=output_dir)
 
-    if args.station_cv:
-        print("\n[Optional] Leave-one-station-out CV...")
-        run_cross_validation(
-            df, full_features, cv_strategy="station", random_state=random_state
+    # Generalization to entirely unseen stations (leave-one-station-out).
+    loso = None
+    if df["station"].nunique() >= 3:
+        print("[2/5] Leave-one-station-out generalization...")
+        loso = run_cross_validation(
+            df, full_features, cv_strategy="station",
+            random_state=random_state, xgb_params=xgb_params, verbose=False,
+        )
+        print(
+            f"  LOSO mean PR-AUC={loso['mean_ap']:.4f}  "
+            f"ROC-AUC={loso['mean_roc']:.4f}"
         )
 
     # --- Step 3: Driver ablation (BH-FDR), baselines, seed robustness ---
@@ -345,6 +352,7 @@ def main() -> None:
         baselines_df=baselines_df,
         seed_robust=seed_robust,
         operational=operational,
+        loso=loso,
     )
 
     print("\n" + "=" * 60)
