@@ -116,17 +116,21 @@ tab1, tab2, tab3, tab4 = st.tabs(
 with tab1:
     st.subheader("What the study found")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Top driver (real data)", "vegetation / NDVI", "ΔPR-AUC +0.018 ✓")
-    c2.metric("Forecast skill", "ROC-AUC 0.73", "PR-AUC 0.14 @ 6% base rate")
-    c3.metric("Stations", "3", "3,285 station-days")
+    c1.metric("Robust drivers (real)", "3 groups", "humidity · vegetation · seasonality")
+    c2.metric("Forecast skill", "ROC-AUC 0.69", "PR-AUC 0.13 · BSS +0.012")
+    c3.metric("Stations", "6", "6,570 station-days")
     st.markdown(
         """
-A systematic *driver ablation* ranks each satellite and reanalysis driver group
-by its incremental forecasting skill. On real data, **MODIS vegetation cover
-(NDVI) is the one satellite driver with statistically significant incremental
-skill.** Where the satellite sees less green cover (more exposed, erodible
-surface), next-day dust is more predictable — information not already present in
-the rest of the feature set.
+A systematic, FDR-corrected *driver ablation* across **6 Saudi stations** ranks
+each satellite and reanalysis driver group by its incremental forecasting skill.
+Three groups survive multiple-comparison correction: **humidity/dryness,
+vegetation cover (NDVI) and seasonality** — physically, dry air over a bare,
+erodible surface during the dust season.
+
+Honest caveat: absolute skill is modest and station-dependent, and the operating
+points are weak (catching half of all dust days costs a ~38% false-alarm rate),
+so this is a reproducible **baseline with robust driver attribution**, not a
+deployable warning system.
 
 This live demo trains on the project's **synthetic** generator (self-contained,
 no keys) so you can interact with the model. The real-data numbers above come
