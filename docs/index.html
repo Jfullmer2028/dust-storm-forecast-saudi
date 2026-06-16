@@ -58,34 +58,34 @@
 
 <div class="wrap">
   <div class="finding">
-    A systematic ablation ranks satellite and reanalysis drivers by their incremental
-    skill at predicting next-day dust. The result:
-    <b>MODIS vegetation cover (NDVI) is the one satellite driver with statistically
-    significant incremental skill.</b> Where the satellite sees less green cover
-    (more exposed, erodible surface), next-day dust is more predictable.
+    A systematic, FDR-corrected ablation across <b>6 Saudi stations</b> ranks each
+    driver by its incremental skill at predicting next-day dust. Three groups
+    survive correction: <b>humidity/dryness, vegetation cover (NDVI) and
+    seasonality</b> — physically, dry air over a bare, erodible surface during the
+    dust season.
   </div>
 
   <div class="cards">
-    <div class="card"><div class="k">Top driver</div><div class="v ok">vegetation (NDVI)</div><div class="d">ΔPR-AUC +0.018, CI [+0.007,+0.037]</div></div>
-    <div class="card"><div class="k">Forecast skill</div><div class="v">ROC-AUC 0.73</div><div class="d">PR-AUC 0.14 at a 6% base rate</div></div>
-    <div class="card"><div class="k">Reproducibility</div><div class="v">no API keys</div><div class="d">3 stations · 3,285 station-days</div></div>
+    <div class="card"><div class="k">Robust drivers</div><div class="v ok">3 groups</div><div class="d">humidity · vegetation · seasonality (FDR&nbsp;sig.)</div></div>
+    <div class="card"><div class="k">Forecast skill</div><div class="v">ROC-AUC 0.69</div><div class="d">PR-AUC 0.13 &gt; persistence; BSS +0.012</div></div>
+    <div class="card"><div class="k">Reproducibility</div><div class="v">no API keys</div><div class="d">6 stations · 6,570 station-days</div></div>
   </div>
 
   <h2>What actually matters — driver ablation</h2>
-  <p>Each physical driver group is dropped, the model retrained, and the change in PR-AUC measured with a paired bootstrap 95% CI and a bootstrap p-value. P-values are <strong>Benjamini–Hochberg FDR-corrected</strong> across the groups. Only <strong>vegetation</strong> survives correction.</p>
-  <figure><img src="assets/driver_ablation_real.png" alt="Real-data driver ablation"><figcaption>Real data — incremental PR-AUC per driver group (green = significant at FDR q=0.05).</figcaption></figure>
+  <p>Each physical driver group is dropped, the (Platt-calibrated) model retrained, and the change in PR-AUC measured with a paired bootstrap 95% CI and a bootstrap p-value. P-values are <strong>Benjamini–Hochberg FDR-corrected</strong> across the groups; three survive.</p>
+  <figure><img src="assets/driver_ablation_real.png" alt="Real-data driver ablation"><figcaption>Real data, 6 stations — incremental PR-AUC per driver group (green = significant at FDR q=0.05).</figcaption></figure>
 
   <table>
     <tr><th>Driver group</th><th>Incremental PR-AUC</th><th>95% CI</th><th>p (FDR)</th><th>sig.</th></tr>
-    <tr><td><b>vegetation (NDVI)</b></td><td>+0.018</td><td>[+0.007, +0.037]</td><td>0.030</td><td class="ok">yes</td></tr>
-    <tr><td>antecedent moisture</td><td>+0.008</td><td>[−0.004, +0.021]</td><td>0.438</td><td>no</td></tr>
-    <tr><td>pressure</td><td>+0.007</td><td>[−0.002, +0.018]</td><td>—</td><td>no</td></tr>
-    <tr><td>wind direction</td><td>+0.005</td><td>[−0.018, +0.021]</td><td>—</td><td>no</td></tr>
-    <tr><td>wind speed</td><td>+0.005</td><td>[−0.023, +0.027]</td><td>—</td><td>no</td></tr>
-    <tr><td>albedo</td><td>+0.004</td><td>[−0.015, +0.022]</td><td>—</td><td>no</td></tr>
-    <tr><td>soil texture</td><td>−0.003</td><td>[−0.013, +0.007]</td><td>—</td><td>no</td></tr>
+    <tr><td><b>humidity/dryness</b></td><td>+0.036</td><td>[+0.015, +0.065]</td><td>0.005</td><td class="ok">yes</td></tr>
+    <tr><td><b>vegetation (NDVI)</b></td><td>+0.025</td><td>[+0.006, +0.049]</td><td>0.027</td><td class="ok">yes</td></tr>
+    <tr><td><b>seasonality</b></td><td>+0.023</td><td>[+0.007, +0.044]</td><td>0.005</td><td class="ok">yes</td></tr>
+    <tr><td>soil texture</td><td>+0.017</td><td>[+0.002, +0.036]</td><td>0.055</td><td>no</td></tr>
+    <tr><td>wind speed</td><td>+0.016</td><td>[−0.005, +0.040]</td><td>0.170</td><td>no</td></tr>
+    <tr><td>albedo</td><td>+0.014</td><td>[−0.002, +0.037]</td><td>0.157</td><td>no</td></tr>
+    <tr><td>wind direction</td><td>−0.001</td><td>[−0.016, +0.016]</td><td>0.873</td><td>no</td></tr>
   </table>
-  <p style="color:var(--muted);font-size:.9rem">Naive baselines: no-skill 0.061 · persistence 0.102 · meteorology-only 0.119 · <b>full model 0.141</b> (PR-AUC). Top-driver Δ is +0.009 ± 0.008 across 5 seeds (seed-sensitive at this sample).</p>
+  <p style="color:var(--muted);font-size:.9rem">Naive baselines: no-skill 0.056 · persistence 0.100 · meteorology-only 0.108 · <b>full model 0.125</b> (PR-AUC). Top-driver Δ is +0.023 ± 0.011 across 5 seeds. Honest caveat: absolute skill is modest and station-dependent (PR-AUC 0.144 at Riyadh, 0.044 at Tabuk); catching half of all dust days costs a ~38% false-alarm rate — a reproducible baseline, not a deployable warning system.</p>
 
   <h2>🎛️ Live dust-risk calculator</h2>
   <p>A logistic surrogate of the model (synthetic data). Move the drivers; the probability updates live. Notice how much <em>wind</em>, <em>northerly (shamal) flow</em> and <em>vegetation cover</em> move the needle.</p>

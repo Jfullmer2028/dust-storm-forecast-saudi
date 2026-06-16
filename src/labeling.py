@@ -113,6 +113,14 @@ def build_master_dataframe(
     ndvi_daily = mod09_df["ndvi"].reindex(df.index).ffill(limit=7)
     df["ndvi"] = ndvi_daily
 
+    # Longer antecedent-precipitation windows (wet surfaces suppress emission);
+    # new information beyond the 7-day window, computed per station in time order.
+    if "precip_sum" in df.columns:
+        for w in (14, 30):
+            df[f"precip_{w}d"] = (
+                df["precip_sum"].rolling(w, min_periods=1).sum().shift(1)
+            )
+
     df = add_temporal_features(df)
     df = add_lag_features(df, ERA5_LAG_COLS)
 

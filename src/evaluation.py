@@ -287,6 +287,47 @@ def compute_naive_baselines(
     return pd.DataFrame(rows)
 
 
+def operational_metrics(model_results: dict) -> dict[str, Any]:
+    """
+    Decision-relevant metrics on the out-of-fold probabilities, so a modest
+    forecaster can still be judged as a *warning system*:
+
+      - Brier score and Brier Skill Score (BSS) vs a climatology forecast
+      - recall achievable at a usable precision (>= 0.30)
+      - precision and false-alarm rate at the operating point that catches
+        half of all dust days (recall = 0.50)
+    """
+    from sklearn.metrics import (
+        brier_score_loss,
+        precision_recall_curve,
+        roc_curve,
+    )
+
+    y = np.concatenate(model_results["fold_true"])
+    p = np.concatenate(model_results["fold_proba"])
+    base = float(y.mean())
+
+    brier = float(brier_score_loss(y, p))
+    brier_clim = base * (1 - base)
+    bss = 1 - brier / brier_clim if brier_clim > 0 else float("nan")
+
+    prec, rec, _ = precision_recall_curve(y, p)
+    rec_at_p30 = float(rec[prec >= 0.30].max()) if (prec >= 0.30).any() else 0.0
+    prec_at_r50 = float(prec[rec >= 0.50].max()) if (rec >= 0.50).any() else 0.0
+
+    fpr, tpr, _ = roc_curve(y, p)
+    fpr_at_r50 = float(fpr[tpr >= 0.50][0]) if (tpr >= 0.50).any() else 1.0
+
+    return {
+        "base_rate": base,
+        "brier": brier,
+        "brier_skill_score": float(bss),
+        "recall_at_precision30": rec_at_p30,
+        "precision_at_recall50": prec_at_r50,
+        "fpr_at_recall50": fpr_at_r50,
+    }
+
+
 def seed_robustness(
     df: pd.DataFrame,
     full_features: list[str],
@@ -444,6 +485,7 @@ def write_report(
     data_mode: str = "synthetic",
     baselines_df: "pd.DataFrame | None" = None,
     seed_robust: dict | None = None,
+    operational: dict | None = None,
 ) -> None:
     """Write the markdown results report for the driver study."""
     output_path = Path(output_path)
@@ -516,6 +558,41 @@ def write_report(
                 f"| {r['baseline']} | {r['pr_auc']:.4f} | {r['roc_auc']:.4f} |"
             )
         lines.append("")
+
+    # Operational / decision-relevant evaluation
+    if operational is not None:
+        o = operational
+        lines.extend(
+            [
+                "## Operational Evaluation",
+                "",
+                "Judging the probabilities as a warning system (out-of-fold):",
+                "",
+                "| Quantity | Value |",
+                "|----------|-------|",
+                f"| Brier score | {o['brier']:.4f} |",
+                f"| Brier Skill Score (vs climatology) | {o['brier_skill_score']:+.3f} |",
+                f"| Recall at precision ≥ 0.30 | {o['recall_at_precision30']:.2f} |",
+                f"| Precision at recall = 0.50 | {o['precision_at_recall50']:.2f} |",
+                f"| False-alarm rate at recall = 0.50 | {o['fpr_at_recall50']:.2f} |",
+                "",
+                f"To catch **half of all dust days**, the model issues warnings "
+                f"on {100 * o['fpr_at_recall50']:.0f}% of calm days "
+                f"(precision {o['precision_at_recall50']:.2f} at a "
+                f"{100 * o['base_rate']:.1f}% base rate — a "
+                f"{o['precision_at_recall50'] / max(o['base_rate'], 1e-9):.1f}× "
+                "lift over random). "
+                + (
+                    "The calibrated probabilities are sharper than a climatology "
+                    "forecast (positive Brier Skill Score)."
+                    if o["brier_skill_score"] > 0
+                    else "The Brier Skill Score is not above climatology, so the "
+                    "probabilities add ranking value but limited probabilistic "
+                    "sharpness over the base rate."
+                ),
+                "",
+            ]
+        )
 
     # Driver ablation — the headline analysis (BH-FDR corrected)
     sig = ablation_df[ablation_df["significant_fdr"]]
