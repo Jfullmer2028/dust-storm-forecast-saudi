@@ -17,9 +17,10 @@ climatology (Brier Skill Score +0.012). Three driver groups carry **FDR-signific
 seed-robust** incremental skill: **humidity/dryness** (ΔPR-AUC +0.036, FDR
 p = 0.005), **vegetation (NDVI)** (+0.025, FDR p = 0.027) and **seasonality**
 (+0.023, FDR p = 0.005) — i.e. dry air over a bare, erodible surface during the
-dust season. Absolute skill is modest and station-dependent, so we frame the
-result as a reproducible **baseline** with robust driver attribution rather than a
-deployable forecaster. The study runs end-to-end with no API keys via public APIs
+dust season. The result generalizes to unseen stations (leave-one-station-out
+PR-AUC 0.16), but absolute point-station skill is modest, so we frame it as a
+reproducible **baseline** with robust driver attribution rather than a deployable
+forecaster. The study runs end-to-end with no API keys via public APIs
 (Open-Meteo, ORNL DAAC MODIS, NOAA ISD, SoilGrids).
 
 ## 1. Introduction
@@ -79,7 +80,9 @@ predict the day-*D+1* label (`shift(-1)`).
 - **Cross-validation.** `TimeSeriesSplit` on rows sorted by *date* across
   stations, so every training fold strictly precedes its test fold (no temporal
   leakage). Decision thresholds (for F₂ only) are tuned on a held-out validation
-  slice of each training fold — never the test fold.
+  slice of each training fold — never the test fold. Probabilities are
+  Platt-calibrated per fold on that validation slice. Spatial generalization is
+  measured separately with **leave-one-station-out** CV.
 - **Metrics.** Primary: **PR-AUC** (average precision), threshold-independent and
   appropriate for a ~6% rare-event problem. Secondary: ROC-AUC. Operational:
   F₂ (β=2) at the tuned threshold. Inference via paired bootstrap 95% CIs on
@@ -121,8 +124,16 @@ The full model beats persistence and the meteorology-only model. As a warning
 system, the calibrated probabilities have a positive Brier Skill Score (+0.012,
 sharper than climatology); the operating points, however, are weak — catching half
 of all dust days costs a ~38% false-alarm rate — so the model is a useful baseline,
-not a deployable forecaster. Per-station PR-AUC ranges from 0.144 (Riyadh) to
-0.044 (Tabuk).
+not a deployable forecaster.
+
+**Generalization to unseen stations.** Under leave-one-station-out
+cross-validation (train on five stations, test on a held-out sixth), the model
+attains PR-AUC 0.159 / ROC-AUC 0.719 — on par with, indeed slightly above, the
+within-station temporal CV. The driver relationships therefore transfer across
+the region to new stations; what varies is each station's *intrinsic* 24-h
+predictability (within-station temporal PR-AUC ranges from 0.144 at Riyadh to
+0.044 at Tabuk, reflecting how synoptically- versus locally-driven each site's
+dust is), not the model's ability to generalize spatially.
 
 ### 4.2 Driver ablation (Benjamini-Hochberg FDR corrected)
 
@@ -176,11 +187,15 @@ than a single add-one-feature test — is what makes this separation visible, an
 per-fold calibration is what lets the per-fold signal aggregate coherently in the
 pooled metric.
 
-The practical ceiling is low, however: at a 5.6% base rate the forecaster reaches
-PR-AUC 0.13 and catching half of all dust days costs a ~38% false-alarm rate. The
-contribution is therefore best read as a **reproducible baseline with robust
-driver attribution**, and a sobering reference point for what coarse, keyless,
-point-station inputs can deliver 24 h ahead.
+Encouragingly, the result **generalizes spatially**: leave-one-station-out CV
+(PR-AUC 0.159 on held-out, unseen stations) matches the within-station figure, so
+the driver relationships are not station-specific artefacts but transfer across
+the region. The remaining limitation is *absolute* skill at a point: at a 5.6%
+base rate the forecaster reaches PR-AUC ≈ 0.13 and catching half of all dust days
+costs a ~38% false-alarm rate, and intrinsic 24-h predictability varies by site.
+The contribution is therefore best read as a **reproducible, spatially
+generalizable baseline with robust driver attribution**, and a sobering reference
+point for what coarse, keyless, point-station inputs can deliver 24 h ahead.
 
 ## 6. Limitations
 
@@ -206,11 +221,12 @@ In a systematic, FDR-corrected, calibrated ablation across six Saudi stations,
 onset — humidity/dryness, vegetation cover (NDVI), and seasonality** (FDR
 p = 0.005, 0.027, 0.005; seed-robust) — i.e. dry air over a bare, erodible surface
 during the dust season. The forecaster beats naive persistence and
-meteorology-only baselines and its calibrated probabilities are sharper than
-climatology, but absolute and operational skill remain modest and
-station-dependent, so the contribution is a reproducible **baseline with robust
-driver attribution** rather than a deployable warning system. The pipeline is
-fully reproducible without any API keys.
+meteorology-only baselines, its calibrated probabilities are sharper than
+climatology, and it **generalizes to unseen stations** (leave-one-station-out
+PR-AUC 0.159, matching the within-station figure). Absolute, operational skill at
+a point remains modest, so the contribution is a reproducible, spatially
+generalizable **baseline with robust driver attribution** rather than a deployable
+warning system. The pipeline is fully reproducible without any API keys.
 
 ## Reproduce
 

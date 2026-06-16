@@ -2,7 +2,7 @@
 
 Forecast dust-storm onset **24 hours in advance** at Saudi Arabian weather stations using XGBoost, and **identify which satellite and surface drivers carry forecasting skill**. The pipeline trains a forecaster on ERA5 meteorology, MODIS vegetation and reflectivity, and static soil properties, then runs a **driver-group ablation** that measures each physical driver's *incremental* contribution to forecast skill.
 
-> **Headline finding (real data, 6 Saudi stations, 2018–2020):** across 6,570 station-days, three driver groups carry **FDR-significant, seed-robust** incremental skill for next-day dust — **humidity/dryness** (ΔPR-AUC +0.036, FDR p = 0.005), **vegetation (NDVI)** (+0.025, FDR p = 0.027) and **seasonality** (+0.023, FDR p = 0.005) — i.e. dry air over a bare, erodible surface in the dust season. The (calibrated) forecaster beats persistence and meteorology-only baselines and is sharper than climatology (Brier Skill Score +0.012), though absolute skill is modest and station-dependent. See [`results/report_real.md`](results/report_real.md).
+> **Headline finding (real data, 6 Saudi stations, 2018–2020):** across 6,570 station-days, three driver groups carry **FDR-significant, seed-robust** incremental skill for next-day dust — **humidity/dryness** (ΔPR-AUC +0.036, FDR p = 0.005), **vegetation (NDVI)** (+0.025, FDR p = 0.027) and **seasonality** (+0.023, FDR p = 0.005) — i.e. dry air over a bare, erodible surface in the dust season. The (calibrated) forecaster beats persistence and meteorology-only baselines, is sharper than climatology (Brier Skill Score +0.012), and **generalizes to unseen stations** (leave-one-station-out PR-AUC 0.159 ≥ within-station) — though absolute point-station skill remains modest. See [`results/report_real.md`](results/report_real.md).
 
 | Station | Region | WMO ID | Coordinates |
 |---------|--------|--------|-------------|
@@ -30,12 +30,12 @@ python run_pipeline.py
 
 The pipeline will:
 1. Load (or generate) synthetic test data in `data/synthetic/`
-2. Engineer features: ERA5 daily aggregates (incl. wind-direction components), MODIS NDVI and shortwave reflectivity, static soil properties, and cyclical temporal encodings
-3. Cross-validate the forecaster with `TimeSeriesSplit` (8 folds), tuning an **F₂-optimal decision threshold** on a held-out validation slice of each fold
-4. Run a **driver-group ablation** — drop each physical driver group, retrain, and measure its incremental **PR-AUC** with a paired **bootstrap 95% CI**
-5. Report per-fold and per-station performance, and write figures (ablation chart, PR curve, SHAP) to `outputs/` and `results/report.md`
+2. Engineer features: ERA5 daily aggregates (incl. wind-direction components and 14/30-day antecedent precipitation), MODIS NDVI and shortwave reflectivity, static soil properties, and cyclical temporal encodings
+3. Cross-validate a Platt-calibrated forecaster with `TimeSeriesSplit`, plus **leave-one-station-out** CV to measure transfer to unseen stations
+4. Run a **driver-group ablation** — drop each driver group, retrain, and measure its incremental **PR-AUC** with a paired bootstrap 95% CI and **FDR-corrected** p-values
+5. Report naive baselines, operational (warning-system) metrics, per-station and generalization performance, and figures to `outputs/` and `results/report.md`
 
-Expected runtime: ~6–10 minutes on a laptop (~14.5k station-days; the ablation retrains per driver group).
+Expected runtime: ~8–12 minutes on a laptop (the ablation, baselines, seed loop and LOSO each retrain the model).
 
 ### Metrics — why PR-AUC is primary
 
@@ -82,9 +82,9 @@ The driver ablation, ranked by incremental PR-AUC, with **Benjamini–Hochberg F
 | pressure | +0.008 | [−0.007, +0.023] | 0.344 | no |
 | wind direction | −0.001 | [−0.016, +0.016] | 0.873 | no |
 
-**Humidity/dryness, vegetation cover and seasonality** are the driver groups with incremental skill that survives FDR — physically, *dry air over a bare, erodible surface during the dust season*. The top driver's seed-averaged Δ is **+0.023 ± 0.011** (clear of zero, unlike the earlier 3-station result). The probabilities are calibrated (Brier Skill Score **+0.012**, sharper than climatology).
+**Humidity/dryness, vegetation cover and seasonality** are the driver groups with incremental skill that survives FDR — physically, *dry air over a bare, erodible surface during the dust season*. The top driver's seed-averaged Δ is **+0.023 ± 0.011** (clear of zero). The probabilities are calibrated (Brier Skill Score **+0.012**, sharper than climatology).
 
-**Honest caveats (kept in view):** absolute skill is modest and station-dependent — per-station PR-AUC ranges from 0.144 (Riyadh) to 0.044 (Tabuk) — and the operating points are weak (to catch half of all dust days the false-alarm rate is ~38 %). This is a reproducible **baseline** with robust driver attribution, not a deployable warning system. Scaling further (`--stations`, `--modis-years`) is the natural next step.
+**Generalization:** under **leave-one-station-out** CV (train on 5 stations, test on a *held-out, unseen* station) the model reaches **PR-AUC 0.159 / ROC-AUC 0.719** — on par with or better than the within-station temporal CV, so the driver relationships **transfer across the region to new stations**. The remaining limitation is *absolute* skill, which is modest and varies by each station's dust regime (some stations' dust is intrinsically less predictable 24 h ahead): the operating points are weak (catching half of all dust days costs a ~38 % false-alarm rate). It is therefore a **reproducible, generalizable baseline with robust driver attribution**, not yet a deployable warning system.
 
 ## Project Structure
 
@@ -159,6 +159,8 @@ A **dust event on day D+1** is predicted from features on day D.
 - **Naive baselines:** no-skill (base rate), persistence, and a meteorology-only model contextualise the skill (EMBRACE-style)
 - **Operational evaluation:** the probabilities are judged as a *warning system* — Brier Skill Score vs climatology, recall at usable precision, and the false-alarm rate / precision-lift at the point that catches half of all dust days
 - **Driver ablation:** for each driver group, retrain on all-features-minus-group and measure the incremental PR-AUC with a paired **bootstrap 95% CI** and a two-sided bootstrap p-value; p-values are **Benjamini–Hochberg FDR-corrected** across the driver groups
+- **Calibration:** probabilities are Platt-calibrated per fold on the validation slice (so Brier/reliability are honest; PR-AUC/ROC-AUC are unchanged)
+- **Generalization:** **leave-one-station-out** CV (train on the other stations, test on a held-out, unseen one) measures spatial transfer
 - **Robustness:** model PR-AUC/ROC-AUC and the top driver's Δ are re-estimated over 5 seeds (mean ± sd); a **reliability/calibration** diagram and **per-station** breakdown are produced
 
 ## Real Data Mode (keyless — no accounts required)
@@ -191,7 +193,7 @@ the keyless ORNL path is what lets the project run with no credentials.)
 
 ### Scope and cost
 MODIS is **one ORNL request per band per 8-day composite**, so the live run is
-bounded by `config.yaml → real:` (default 3 stations, 2018–2020 study, 2017–2020
+bounded by `config.yaml → real:` (default 6 stations, 2018–2020 study, 2017–2020
 MODIS, ±20 km box). Scale up with:
 
 ```bash

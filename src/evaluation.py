@@ -486,6 +486,7 @@ def write_report(
     baselines_df: "pd.DataFrame | None" = None,
     seed_robust: dict | None = None,
     operational: dict | None = None,
+    loso: dict | None = None,
 ) -> None:
     """Write the markdown results report for the driver study."""
     output_path = Path(output_path)
@@ -539,6 +540,34 @@ def write_report(
             f"{model_results['fold_f2'][i]:.4f} |"
         )
     lines.append("")
+
+    # Generalization to entirely unseen stations (leave-one-station-out)
+    if loso is not None:
+        lines.extend(
+            [
+                "## Generalization to Unseen Stations (leave-one-station-out)",
+                "",
+                "Each station is held out entirely while the model trains on the "
+                "others, so this measures transfer to a *new* location. PR-AUC per "
+                "held-out station:",
+                "",
+                "| Held-out station | PR-AUC | ROC-AUC |",
+                "|------------------|--------|---------|",
+            ]
+        )
+        for i in range(len(loso["fold_ap"])):
+            station = (
+                loso["fold_station"][i][0]
+                if "fold_station" in loso and len(loso["fold_station"][i])
+                else f"fold {i + 1}"
+            )
+            roc = loso["fold_roc"][i]
+            roc_s = "—" if np.isnan(roc) else f"{roc:.4f}"
+            lines.append(f"| {station} | {loso['fold_ap'][i]:.4f} | {roc_s} |")
+        lines.append(
+            f"| **mean** | **{loso['mean_ap']:.4f}** | **{loso['mean_roc']:.4f}** |"
+        )
+        lines.append("")
 
     # Naive baselines (EMBRACE-style context)
     if baselines_df is not None and not baselines_df.empty:
