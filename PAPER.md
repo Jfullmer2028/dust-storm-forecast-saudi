@@ -5,23 +5,29 @@
 ## Abstract
 
 We forecast dust-storm onset 24 hours ahead at dust-prone Saudi Arabian stations
-and identify **which** satellite and meteorological drivers carry predictive
-skill. Using a Platt-calibrated XGBoost classifier with strict temporal
-cross-validation, we train a forecaster on ERA5 reanalysis, MODIS vegetation and
-reflectivity, and static soil properties, then run a systematic **driver-group
-ablation** whose incremental-PR-AUC p-values are corrected for multiple
-comparisons (Benjamini-Hochberg FDR). On real 2018–2020 observations for **six
-stations** (6,570 station-days, 5.6% positive), the forecaster attains PR-AUC 0.13
-/ ROC-AUC 0.69 — above persistence and meteorology-only baselines and sharper than
-climatology (Brier Skill Score +0.012). Three driver groups carry **FDR-significant,
-seed-robust** incremental skill: **humidity/dryness** (ΔPR-AUC +0.036, FDR
-p = 0.005), **vegetation (NDVI)** (+0.025, FDR p = 0.027) and **seasonality**
-(+0.023, FDR p = 0.005) — i.e. dry air over a bare, erodible surface during the
-dust season. The result generalizes to unseen stations (leave-one-station-out
-PR-AUC 0.16), but absolute point-station skill is modest, so we frame it as a
-reproducible **baseline** with robust driver attribution rather than a deployable
-forecaster. The study runs end-to-end with no API keys via public APIs
-(Open-Meteo, ORNL DAAC MODIS, NOAA ISD, SoilGrids).
+and ask **which** satellite and meteorological drivers carry genuine incremental
+predictive skill. Using a Platt-calibrated XGBoost classifier with strict
+temporal cross-validation, we train a forecaster on ERA5 reanalysis, MODIS
+vegetation and reflectivity, and static soil properties, then run a systematic
+**driver-group ablation** whose incremental-PR-AUC p-values are corrected for
+multiple comparisons (Benjamini-Hochberg FDR) and then stress-tested for
+robustness across random seeds and across stations. On real 2018–2020
+observations for **six stations** (6,570 station-days, 5.6% positive), the
+forecaster attains PR-AUC 0.125 / ROC-AUC 0.686 — above persistence and
+meteorology-only baselines, well above a day-of-year seasonal climatology, and
+sharper than climatology as a probability forecast (Brier Skill Score +0.012,
+Expected Calibration Error 0.005). Three driver groups survive FDR correction —
+**humidity/dryness** (ΔPR-AUC +0.036, FDR p = 0.005), **vegetation (NDVI)**
+(+0.025, FDR p = 0.027) and **seasonality** (+0.023, FDR p = 0.005) — but only
+**humidity/dryness** also survives the stricter robustness bar (stable across
+seeds *and* sign-consistent under station jackknife). We therefore report
+humidity/dryness as the one **fully robust** driver and vegetation and
+seasonality as FDR-significant but **suggestive**. The result generalizes to
+unseen stations (leave-one-station-out PR-AUC 0.159, on par with within-station),
+but absolute point-station skill is modest, so we frame it as a reproducible
+**baseline with one robust, physically coherent driver attribution** rather than
+a deployable forecaster. The study runs end-to-end with no API keys via public
+APIs (Open-Meteo, ORNL DAAC MODIS, NOAA ISD, SoilGrids).
 
 ## 1. Introduction
 
@@ -30,10 +36,13 @@ aviation, and solar-energy yield. Numerical forecasts of dust emission depend on
 surface erodibility, which is hard to observe directly, and on the synoptic
 meteorology that mobilises and transports dust. A wide range of satellite and
 reanalysis variables could in principle improve a data-driven forecast, but it is
-rarely clear which actually carry incremental skill beyond the others. We
-therefore ask: *which satellite and meteorological drivers contribute
-statistically significant incremental skill to 24-hour dust-onset prediction?*,
-and answer it with a driver-group ablation.
+rarely clear which actually carry incremental skill beyond the others, and rarer
+still whether a claimed driver survives the random choices (seed, station split)
+that any single fit conceals. We therefore ask: *which satellite and
+meteorological drivers contribute statistically significant **and robust**
+incremental skill to 24-hour dust-onset prediction?*, and answer it with a
+driver-group ablation that is FDR-corrected and then re-tested across seeds and
+across stations.
 
 ### Related work
 
@@ -43,10 +52,11 @@ frequency over Saudi cities, dust-risk mapping from MODIS over the Red Sea
 region, and dust-source/occurrence models over Iraq and Central Asia. These
 studies typically report a single best model and aggregate skill; few quantify
 the *incremental* contribution of individual driver groups with corrected
-significance, or release a fully reproducible keyless pipeline. We follow the
+significance, fewer still subject those contributions to seed/station robustness
+checks, and few release a fully reproducible keyless pipeline. We follow the
 EMBRACE and REFORMS reporting guidance for ML-in-science (naive baselines,
 leakage control, uncertainty, multiple-comparison correction) and contribute the
-driver-attribution and reproducibility angle.
+robust driver-attribution and reproducibility angle.
 
 ## 2. Data
 
@@ -71,7 +81,7 @@ northerly/easterly components and a northerly-flow fraction, capturing the NW
 
 **Labels.** A dust event on day *D+1* is defined by the WMO criterion: at least
 one hourly horizontal visibility ≤ 1 000 m (NOAA ISD). Features on day *D*
-predict the day-*D+1* label (`shift(-1)`).
+predict the day-*D+1* label.
 
 ## 3. Methods
 
@@ -88,22 +98,30 @@ predict the day-*D+1* label (`shift(-1)`).
   F₂ (β=2) at the tuned threshold. Inference via paired bootstrap 95% CIs on
   out-of-fold predictions (2 000–5 000 resamples).
 - **Naive baselines.** Skill is contextualised against a no-skill (climatological
-  base-rate) reference, a persistence baseline (dust tomorrow if dust today), and
-  a meteorology-only model.
+  base-rate) reference, a persistence baseline (dust tomorrow if dust today), a
+  **day-of-year seasonal climatology** (out-of-fold smoothed dust-rate look-up —
+  the right bar for a "seasonality" claim), and a meteorology-only model.
 - **Operational evaluation.** The probabilities are also judged as a warning
-  system: Brier Skill Score against a climatology forecast, the recall achievable
-  at a usable precision (≥ 0.30), and the precision-lift / false-alarm rate at the
-  operating point that catches half of all dust days.
-- **Seed robustness.** The model and the top driver's incremental PR-AUC are
-  re-estimated over five random seeds (mean ± sd reported).
+  system: Brier Skill Score and **Expected Calibration Error** (10-bin) against a
+  climatology forecast, the recall achievable at a usable precision (≥ 0.30), and
+  the precision-lift / false-alarm rate at the operating point that catches half
+  of all dust days.
 - **Driver ablation.** Features are bucketed into physical groups (wind speed,
   wind direction, humidity/dryness, antecedent moisture, thermal/BLH, pressure,
   vegetation, soil texture, seasonality, albedo). For each group *g*, we retrain
   on *all features − g* and measure the incremental contribution
   `PR-AUC(all) − PR-AUC(all − g)` with a paired bootstrap CI and a two-sided
   bootstrap p-value. Because one test is run per group, p-values are corrected
-  for multiple comparisons with **Benjamini-Hochberg FDR** (q = 0.05); the
-  corrected call is the reported result.
+  for multiple comparisons with **Benjamini-Hochberg FDR** (q = 0.05).
+- **Robustness of the ablation (the key tightening).** FDR significance from a
+  single fit is necessary but not sufficient. For every FDR-significant driver we
+  additionally require (i) **seed robustness** — its incremental PR-AUC stays
+  above zero by at least one standard deviation when re-estimated over five
+  random training seeds (mean − sd > 0); and (ii) **station-jackknife
+  sign-consistency** — its incremental PR-AUC stays positive on ≥ 80% of
+  leave-one-station-out subsets. A driver is called **fully robust** only if it
+  passes FDR *and* both checks; one that passes FDR alone is reported as
+  *suggestive*.
 
 ## 4. Results
 
@@ -117,30 +135,34 @@ ROC-AUC = 0.668 ± 0.023.
 |-----------|--------|---------|
 | no-skill (base rate) | 0.056 | 0.500 |
 | persistence (dust today → dust tomorrow) | 0.100 | 0.597 |
+| seasonal climatology (day-of-year) | 0.061 | 0.607 |
 | meteorology-only model | 0.108 | 0.687 |
 | **full model** | **0.125** | **0.686** |
 
-The full model beats persistence and the meteorology-only model. As a warning
-system, the calibrated probabilities have a positive Brier Skill Score (+0.012,
-sharper than climatology); the operating points, however, are weak — catching half
-of all dust days costs a ~38% false-alarm rate — so the model is a useful baseline,
-not a deployable forecaster.
+The full model beats persistence, the day-of-year seasonal climatology, and the
+meteorology-only model. The day-of-year climatology is barely above no-skill
+(PR-AUC 0.061 vs 0.056), so *when* in the year dust occurs carries very little
+standalone predictive content here — a fact that bears directly on the
+seasonality driver below. As a warning system, the calibrated probabilities are
+sharp and well-calibrated (Brier Skill Score +0.012, Expected Calibration Error
+0.005), but the operating points are weak — catching half of all dust days costs
+a ~38% false-alarm rate at 6% precision — so the model is a useful baseline, not
+a deployable forecaster.
 
 **Generalization to unseen stations.** Under leave-one-station-out
 cross-validation (train on five stations, test on a held-out sixth), the model
 attains PR-AUC 0.159 / ROC-AUC 0.719 — on par with, indeed slightly above, the
 within-station temporal CV. The driver relationships therefore transfer across
 the region to new stations; what varies is each station's *intrinsic* 24-h
-predictability (within-station temporal PR-AUC ranges from 0.144 at Riyadh to
-0.044 at Tabuk, reflecting how synoptically- versus locally-driven each site's
-dust is), not the model's ability to generalize spatially.
+predictability (within-station PR-AUC ranges from 0.144 at Riyadh to 0.044 at
+Tabuk), not the model's ability to generalize spatially.
 
-### 4.2 Driver ablation (Benjamini-Hochberg FDR corrected)
+### 4.2 Driver ablation (FDR-corrected, then robustness-tested)
 
 ![Driver ablation, real data](docs/assets/driver_ablation_real.png)
 
-| Driver group | Incremental PR-AUC | 95% CI | p | p (FDR) | sig. |
-|--------------|--------------------|--------|---|---------|------|
+| Driver group | Incremental PR-AUC | 95% CI | p | p (FDR) | FDR sig. |
+|--------------|--------------------|--------|---|---------|----------|
 | **humidity / dryness** | **+0.036** | **[+0.015, +0.065]** | 0.001 | **0.005** | **yes** |
 | **vegetation (NDVI)** | **+0.025** | **[+0.006, +0.049]** | 0.008 | **0.027** | **yes** |
 | **seasonality** | **+0.023** | **[+0.007, +0.044]** | 0.001 | **0.005** | **yes** |
@@ -148,17 +170,33 @@ dust is), not the model's ability to generalize spatially.
 | wind speed | +0.016 | [−0.005, +0.040] | 0.136 | 0.170 | no |
 | antecedent moisture | +0.016 | [−0.002, +0.040] | 0.084 | 0.157 | no |
 | albedo | +0.014 | [−0.002, +0.037] | 0.094 | 0.157 | no |
-| thermal / BLH | +0.014 | [−0.003, +0.036] | 0.116 | 0.166 | no |
+| thermal / BLH | +0.014 | [−0.003, +0.037] | 0.116 | 0.166 | no |
 | pressure | +0.008 | [−0.007, +0.023] | 0.310 | 0.344 | no |
 | wind direction | −0.001 | [−0.016, +0.016] | 0.873 | 0.873 | no |
 
-**Three driver groups survive Benjamini-Hochberg FDR correction: humidity/dryness,
-vegetation, and seasonality** — physically, dry air over a bare, erodible surface
-during the dust season. The seed-averaged incremental skill of the top driver is
-+0.023 ± 0.011 over five seeds (clear of zero), so the effect is robust to the
-random seed as well as to multiple comparisons. (Per-fold Platt calibration is
-important here: pooling *uncalibrated* cross-fold probabilities mismatches the
-probability scale across folds and masks the signal in the pooled metric.)
+Three driver groups survive Benjamini-Hochberg FDR correction: humidity/dryness,
+vegetation, and seasonality. We then subject each to the seed and station
+robustness checks:
+
+| FDR-significant driver | Seed ΔPR-AUC (mean ± sd, min) | Seed robust? | Station-jackknife positive | Verdict |
+|------------------------|------------------------------|--------------|----------------------------|---------|
+| **humidity / dryness** | +0.023 ± 0.011 (min +0.003) | **yes** | **6 / 6** | **fully robust** |
+| vegetation (NDVI) | +0.005 ± 0.008 (min −0.006) | no | 3 / 6 | suggestive |
+| seasonality | +0.008 ± 0.012 (min −0.009) | no | 3 / 6 | suggestive |
+
+**Only humidity/dryness is fully robust.** Its incremental skill is positive on
+*every* seed (mean − sd > 0) and on *every* leave-one-station-out subset.
+Vegetation and seasonality, although FDR-significant in the single full-sample
+fit, are fragile: their seed-averaged incremental skill is within one standard
+deviation of zero, and each adds skill on only half of the station-jackknife
+subsets. We therefore report them as **suggestive, not established**. For
+seasonality this is consistent with §4.1: a standalone day-of-year climatology is
+barely better than no-skill, so it is unsurprising that seasonality's incremental
+contribution does not hold up across resampling. (Per-fold Platt calibration
+matters here: pooling *uncalibrated* cross-fold probabilities mismatches the
+probability scale across folds and masks the signal in the pooled metric; with
+calibration the well-calibrated ECE of 0.005 confirms the probabilities are
+honest.)
 
 ### 4.3 Method validation on synthetic data
 
@@ -166,26 +204,33 @@ On a synthetic benchmark with two known satellite/surface driver signals — a
 strong wind-direction (shamal) precursor and a weaker vegetation precursor — the
 ablation ranks **exactly those two groups first** (ΔPR-AUC +0.052 and +0.017).
 After FDR correction the strong signal is recovered as significant (FDR p = 0.005)
-while the weaker one is flagged as suggestive (FDR p = 0.085), demonstrating that
-the procedure isolates true drivers from noise and is appropriately conservative
-on weak effects at finite sample size.
+*and* fully robust (positive on every seed and on all 8 station-jackknife
+subsets), while the weaker one is flagged as suggestive (FDR p = 0.085). This
+demonstrates that the procedure isolates true drivers from noise, recovers a
+genuine strong driver as robust, and is appropriately conservative on weak
+effects at finite sample size.
 
 ![Driver ablation, synthetic](docs/assets/driver_ablation_synthetic.png)
 
 ## 5. Discussion
 
-The three FDR-significant drivers form a physically coherent picture of dust
-onset: **dry air** (humidity/dryness), a **bare, erodible surface** (vegetation /
-NDVI) and the **dust season** (seasonality) — emission is favoured when a dry,
-sparsely-vegetated surface meets the seasonal synoptic forcing. These are
-first-order controls that complement, rather than duplicate, each other, which is
-why each adds incremental skill. Wind speed and direction, by contrast, do not
-survive correction: they are informative but their information is largely shared
-across the feature set (the drop-group ablation credits only the *unique*
-contribution). A ranked, FDR-controlled ablation of all driver groups — rather
-than a single add-one-feature test — is what makes this separation visible, and
-per-fold calibration is what lets the per-fold signal aggregate coherently in the
-pooled metric.
+After the stricter bar, the defensible attribution narrows to a single,
+physically first-order control: **dry air** (humidity/dryness). It is the one
+driver whose incremental skill survives FDR correction *and* re-estimation across
+seeds *and* removal of any single station — i.e. it is neither a multiple-testing
+artefact nor an artefact of one station or one lucky fit. Physically this is the
+expected leading control: a dry boundary layer favours dust lofting and reduces
+the cohesion that suppresses emission.
+
+Vegetation (NDVI) and seasonality remain *suggestive*. Their point estimates are
+positive and FDR-significant in the full sample, and they fit the same physical
+story (a bare, erodible surface during the dust season), but at this sample size
+their contribution is not stable enough to call established. Honest reporting
+requires distinguishing the two tiers rather than presenting all three FDR hits
+as equally secure. The seasonal-climatology baseline reinforces this for
+seasonality specifically: a calendar look-up alone barely beats no-skill, so the
+seasonal "driver" is doing little that the rest of the feature set does not
+already capture.
 
 Encouragingly, the result **generalizes spatially**: leave-one-station-out CV
 (PR-AUC 0.159 on held-out, unseen stations) matches the within-station figure, so
@@ -194,38 +239,43 @@ the region. The remaining limitation is *absolute* skill at a point: at a 5.6%
 base rate the forecaster reaches PR-AUC ≈ 0.13 and catching half of all dust days
 costs a ~38% false-alarm rate, and intrinsic 24-h predictability varies by site.
 The contribution is therefore best read as a **reproducible, spatially
-generalizable baseline with robust driver attribution**, and a sobering reference
-point for what coarse, keyless, point-station inputs can deliver 24 h ahead.
+generalizable baseline with one robust driver attribution (humidity/dryness)**,
+and a sobering reference point for what coarse, keyless, point-station inputs can
+deliver 24 h ahead.
 
 ## 6. Limitations
 
 - Six stations and a single satellite-baseline year (2017); a ±20 km MODIS
-  footprint rather than a basin-scale 200 km mean.
+  footprint rather than a basin-scale 200 km mean. Widening these (`--stations`,
+  `--modis-years`, `--albedo-km`) is the natural route to upgrade vegetation and
+  seasonality from suggestive to robust — or to rule them out.
 - Keyless satellite indices use MOD09A1 reflectance, not native higher-level
   MODIS products.
-- Absolute skill is modest (PR-AUC ≈ 0.13 at a 5.6% base rate) and
-  station-dependent; dust onset at a point is intrinsically hard 24 h ahead.
+- Absolute skill is modest (PR-AUC ≈ 0.13 at a 5.6% base rate); dust onset at a
+  point is intrinsically hard 24 h ahead.
 - The drop-group ablation measures *incremental* skill, so a driver that is real
   but **correlated** with others (e.g. wind speed and wind direction) can test
   non-significant because its information is also carried elsewhere; this is a
   conservative, not a null, statement about such drivers.
+- The robustness bar is deliberately strict (seed mean − sd > 0 *and* ≥ 80%
+  station-jackknife positivity); a driver labelled "suggestive" here is not
+  refuted, only not yet established.
 - The synthetic results validate the *machinery*, not the geophysics.
-
-These are single CLI flags away from being widened (`--albedo-km`,
-`--modis-years`, `--stations`).
 
 ## 7. Conclusion
 
-In a systematic, FDR-corrected, calibrated ablation across six Saudi stations,
-**three driver groups carry robust incremental skill for 24-hour dust-storm
-onset — humidity/dryness, vegetation cover (NDVI), and seasonality** (FDR
-p = 0.005, 0.027, 0.005; seed-robust) — i.e. dry air over a bare, erodible surface
-during the dust season. The forecaster beats naive persistence and
-meteorology-only baselines, its calibrated probabilities are sharper than
-climatology, and it **generalizes to unseen stations** (leave-one-station-out
-PR-AUC 0.159, matching the within-station figure). Absolute, operational skill at
-a point remains modest, so the contribution is a reproducible, spatially
-generalizable **baseline with robust driver attribution** rather than a deployable
+In a systematic, FDR-corrected, calibrated ablation across six Saudi stations —
+then stress-tested across seeds and stations — **one driver group carries fully
+robust incremental skill for 24-hour dust-storm onset: humidity/dryness** (FDR
+p = 0.005; positive on every seed and every station-jackknife subset). Two further
+groups, **vegetation (NDVI)** and **seasonality**, are FDR-significant but do not
+survive the seed/station robustness checks, so we report them as suggestive
+rather than established. The forecaster beats naive persistence, seasonal
+climatology, and meteorology-only baselines, its calibrated probabilities are
+sharp and well-calibrated (BSS +0.012, ECE 0.005), and it **generalizes to unseen
+stations** (leave-one-station-out PR-AUC 0.159). Absolute, operational skill at a
+point remains modest, so the contribution is a reproducible, spatially
+generalizable **baseline with one robust driver attribution**, not a deployable
 warning system. The pipeline is fully reproducible without any API keys.
 
 ## Reproduce
