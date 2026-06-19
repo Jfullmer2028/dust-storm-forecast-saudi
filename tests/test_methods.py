@@ -7,9 +7,12 @@ import pandas as pd
 from src.evaluation import (
     benjamini_hochberg,
     compute_naive_baselines,
+    expected_calibration_error,
     operational_metrics,
     plot_calibration,
     seed_robustness,
+    seed_robustness_groups,
+    station_jackknife_ablation,
 )
 
 
@@ -69,6 +72,7 @@ class TestNaiveBaselines:
         )
         names = out["baseline"].tolist()
         assert names == ["no-skill (base rate)", "persistence",
+                         "seasonal climatology (day-of-year)",
                          "meteorology-only model", "full model"]
         base_rate = df["dust_event_next_day"].mean()
         assert np.isclose(
@@ -79,6 +83,85 @@ class TestNaiveBaselines:
         assert out.loc[0, "roc_auc"] == 0.5
         # Full-model row reflects the supplied model_results.
         assert out.loc[out["baseline"] == "full model", "pr_auc"].iloc[0] == 0.4
+
+    def test_seasonal_climatology_between_noskill_and_full(self):
+        # Plant a seasonal signal: dust rate rises with day-of-year so a
+        # day-of-year climatology beats the flat base rate but stays < 1.
+        rng = np.random.default_rng(3)
+        dates = pd.date_range("2018-01-01", periods=730, freq="D")
+        doy = dates.dayofyear.values
+        season = 0.04 + 0.12 * (np.sin(2 * np.pi * doy / 365.0) > 0)
+        frames = []
+        for s in ("a", "b"):
+            y = (rng.random(len(dates)) < season).astype(int)
+            frames.append(pd.DataFrame({
+                "date": dates, "station": s,
+                "ws_max": rng.normal(0, 1, len(dates)),
+                "rh_mean": rng.normal(0, 1, len(dates)),
+                "ndvi": rng.normal(0, 1, len(dates)),
+                "dust_event_next_day": y,
+            }))
+        df = pd.concat(frames, ignore_index=True)
+        out = compute_naive_baselines(
+            df, ["ws_max", "rh_mean", "ndvi"],
+            {"mean_ap": 0.4, "mean_roc": 0.8}, n_splits=4,
+            xgb_params={"n_estimators": 40},
+        )
+        seas = out.loc[
+            out["baseline"] == "seasonal climatology (day-of-year)", "pr_auc"
+        ].iloc[0]
+        base = df["dust_event_next_day"].mean()
+        assert base <= seas <= 1.0
+        # A real seasonal signal should lift PR-AUC above the flat base rate.
+        assert seas > base
+
+
+class TestExpectedCalibrationError:
+    def test_perfectly_calibrated_is_near_zero(self):
+        # Predictions equal to true bin frequencies -> ECE ~ 0.
+        rng = np.random.default_rng(0)
+        p = rng.random(20000)
+        y = (rng.random(20000) < p).astype(int)  # P(y=1) == p by construction
+        ece = expected_calibration_error(y, p, n_bins=10)
+        assert 0.0 <= ece < 0.03
+
+    def test_miscalibrated_is_large(self):
+        # All predictions 0.9 but events never happen -> ECE ~ 0.9.
+        y = np.zeros(1000, dtype=int)
+        p = np.full(1000, 0.9)
+        ece = expected_calibration_error(y, p, n_bins=10)
+        assert abs(ece - 0.9) < 1e-6
+
+
+class TestStationJackknife:
+    def test_shape_and_fields(self):
+        df = _cv_frame(n_days=300, stations=("a", "b", "c"))
+        feats = ["ws_max", "rh_mean", "ndvi"]
+        groups = {"wind_speed": ["ws_max"], "humidity_dryness": ["rh_mean"]}
+        out = station_jackknife_ablation(
+            df, feats, groups, ["wind_speed"], n_splits=3,
+            xgb_params={"n_estimators": 40},
+        )
+        assert list(out["group"]) == ["wind_speed"]
+        r = out.iloc[0]
+        assert r["n_stations_tested"] == 3  # one LOSO subset per station
+        assert 0 <= r["frac_positive"] <= 1
+        assert r["min_incremental"] <= r["max_incremental"]
+
+
+class TestSeedRobustnessGroups:
+    def test_table_and_overall(self):
+        df = _cv_frame()
+        groups = {"wind_speed": ["ws_max"], "humidity_dryness": ["rh_mean"]}
+        table, overall = seed_robustness_groups(
+            df, ["ws_max", "rh_mean", "ndvi"], groups,
+            ["wind_speed", "humidity_dryness"], seeds=[1, 2, 3],
+            n_splits=3, xgb_params={"n_estimators": 40},
+        )
+        assert set(table["group"]) == {"wind_speed", "humidity_dryness"}
+        for col in ("delta_mean", "delta_sd", "delta_min", "robust_seed"):
+            assert col in table.columns
+        assert overall["ap_sd"] >= 0 and 0.0 <= overall["ap_mean"] <= 1.0
 
 
 class TestSeedRobustness:

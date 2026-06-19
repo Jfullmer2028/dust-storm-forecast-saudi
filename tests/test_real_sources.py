@@ -1,10 +1,8 @@
 """Offline tests for keyless real-source parsing (network mocked)."""
 
-import io
 
 import numpy as np
 import pandas as pd
-import pytest
 
 import src.real_sources as rs
 from src.labeling import build_visibility_labels

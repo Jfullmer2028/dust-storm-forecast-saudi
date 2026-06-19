@@ -30,7 +30,8 @@ from src.evaluation import (  # noqa: E402
     plot_feature_importance,
     plot_pr_curve,
     run_group_ablation,
-    seed_robustness,
+    seed_robustness_groups,
+    station_jackknife_ablation,
     write_report,
 )
 from src.features import (  # noqa: E402
@@ -318,14 +319,31 @@ def main() -> None:
         xgb_params=xgb_params, random_state=random_state,
     )
 
-    print("[3/5] Seed robustness...")
+    # Candidate drivers to scrutinise: the FDR-significant ones, or (if none
+    # survive) the single strongest, so the robustness checks always run.
     groups = build_feature_groups(full_features)
-    top_group = ablation_df.iloc[0]["group"]
+    sig_mask = ablation_df["significant_fdr"]
+    candidate_groups = (
+        ablation_df.loc[sig_mask, "group"].tolist()
+        if sig_mask.any()
+        else [ablation_df.iloc[0]["group"]]
+    )
+
+    print("[3/5] Seed robustness (all candidate drivers)...")
     seeds = [random_state + i for i in range(config["model"].get("n_seeds", 5))]
-    seed_robust = seed_robustness(
-        df, full_features, groups[top_group], seeds,
+    seed_robust_table, seed_robust = seed_robustness_groups(
+        df, full_features, groups, candidate_groups, seeds,
         n_splits=n_splits, xgb_params=xgb_params,
     )
+
+    # Station-jackknife of the candidate drivers (transfer across stations).
+    station_jack = None
+    if df["station"].nunique() >= 3:
+        print("[3/5] Station-jackknife of candidate drivers...")
+        station_jack = station_jackknife_ablation(
+            df, full_features, groups, candidate_groups,
+            n_splits=n_splits, xgb_params=xgb_params, random_state=random_state,
+        )
 
     print("[3/5] Operational metrics...")
     operational = operational_metrics(model_results)
@@ -353,6 +371,8 @@ def main() -> None:
         seed_robust=seed_robust,
         operational=operational,
         loso=loso,
+        seed_robust_table=seed_robust_table,
+        station_jack=station_jack,
     )
 
     print("\n" + "=" * 60)

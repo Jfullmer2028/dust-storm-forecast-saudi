@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from src.acquisition import load_config, load_synthetic_station_bundle
