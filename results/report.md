@@ -54,6 +54,7 @@ The forecaster against simple references (out-of-fold where a model is involved)
 |-----------|--------|---------|
 | no-skill (base rate) | 0.0864 | 0.5000 |
 | persistence | 0.2554 | 0.7025 |
+| seasonal climatology (day-of-year) | 0.0974 | 0.5707 |
 | meteorology-only model | 0.3570 | 0.8153 |
 | full model | 0.3706 | 0.8413 |
 
@@ -65,6 +66,7 @@ Judging the probabilities as a warning system (out-of-fold):
 |----------|-------|
 | Brier score | 0.0673 |
 | Brier Skill Score (vs climatology) | +0.141 |
+| Expected Calibration Error (10-bin) | 0.0103 |
 | Recall at precision ≥ 0.30 | 0.56 |
 | Precision at recall = 0.50 | 0.34 |
 | False-alarm rate at recall = 0.50 | 0.09 |
@@ -89,8 +91,24 @@ Incremental skill of each physical driver group: the change in PR-AUC when that 
 | albedo | 4 | -0.0080 | [-0.0184, +0.0022] | 0.122 | 0.407 | no |
 
 **Driver groups significant after FDR correction:** wind_direction.
+Of these, **wind_direction** is *fully robust* — significant after FDR **and** stable across random seeds **and** sign-consistent under station jackknife.
 
-Seed robustness of the top driver (ΔPR-AUC over 5 seeds): +0.0523 ± 0.0022.
+### Seed robustness of candidate drivers
+
+Incremental PR-AUC of each candidate driver re-estimated over 5 random training seeds. `robust_seed` requires mean − sd > 0.
+
+| Driver group | ΔPR-AUC mean | sd | min | robust |
+|--------------|--------------|----|-----|--------|
+| wind_direction | +0.0523 | 0.0022 | +0.0487 | yes |
+
+### Station-jackknife robustness of candidate drivers
+
+Each candidate driver's incremental PR-AUC recomputed with each station removed in turn. `frac_positive` is the share of leave-one-station-out subsets on which the driver still adds skill.
+
+| Driver group | LOSO subsets | positive | frac positive | min Δ | max Δ |
+|--------------|--------------|----------|---------------|-------|-------|
+| wind_direction | 8 | 8 | 1.00 | +0.0356 | +0.0633 |
+
 
 ## Per-Station Performance
 
@@ -114,4 +132,4 @@ Seed robustness of the top driver (ΔPR-AUC over 5 seeds): +0.0523 ± 0.0022.
 
 ## Conclusion
 
-The forecaster attains a cross-validated PR-AUC of 0.371 (ROC-AUC 0.841) at a 8.6% base rate, well above the no-skill PR-AUC of 0.086. After Benjamini-Hochberg FDR correction across the driver groups, **wind_direction** retains statistically significant incremental skill, with **wind_direction** the strongest (ΔPR-AUC +0.0523, FDR p=0.005). Remaining groups carry information already present elsewhere in the feature set.
+The forecaster attains a cross-validated PR-AUC of 0.371 (ROC-AUC 0.841) at a 8.6% base rate, well above the no-skill PR-AUC of 0.086. After multiple-comparison correction, **wind_direction** carry incremental skill that survives FDR correction, seed re-estimation, and station jackknife, with **wind_direction** the strongest (ΔPR-AUC +0.0523, FDR p=0.005). Remaining groups carry information already present elsewhere in the feature set.
