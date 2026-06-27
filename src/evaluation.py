@@ -239,6 +239,50 @@ def run_group_ablation(
     return table
 
 
+def _seasonal_climatology_oof(
+    df: pd.DataFrame, n_splits: int = 5, doy_window: int = 15
+) -> tuple[float, float]:
+    """
+    Out-of-fold PR-AUC / ROC-AUC of a day-of-year climatology forecast.
+
+    For each temporal test fold, a smoothed empirical dust-rate-by-day-of-year
+    curve is built from the *training* rows only (circular ±``doy_window``-day
+    mean), then used to predict the test rows by their day of year. This is the
+    seasonal-only reference: it captures *when* dust is climatologically likely
+    without any same-day meteorology or satellite information, and is the right
+    bar for judging whether the "seasonality" driver adds more than a calendar
+    look-up. It is evaluated on the same TimeSeriesSplit folds as the model so
+    there is no peeking into the future.
+    """
+    from sklearn.metrics import average_precision_score, roc_auc_score
+    from sklearn.model_selection import TimeSeriesSplit
+
+    d = df.sort_values(["date", "station"]).reset_index(drop=True)
+    doy = pd.to_datetime(d["date"]).dt.dayofyear.values.astype(int)
+    y = d[TARGET].astype(int).values
+
+    cv = TimeSeriesSplit(n_splits=n_splits)
+    oof_true, oof_pred = [], []
+    for train_idx, test_idx in cv.split(d):
+        y_tr, doy_tr = y[train_idx], doy[train_idx]
+        base = float(y_tr.mean())
+        clim = np.full(367, base)
+        for dd in range(1, 367):
+            diff = np.abs(doy_tr - dd)
+            diff = np.minimum(diff, 366 - diff)  # circular distance on the year
+            m = diff <= doy_window
+            if m.sum() >= 20:
+                clim[dd] = float(y_tr[m].mean())
+        oof_true.append(y[test_idx])
+        oof_pred.append(clim[doy[test_idx]])
+
+    yt = np.concatenate(oof_true)
+    pp = np.concatenate(oof_pred)
+    if not (0 < yt.sum() < len(yt)):
+        return float("nan"), float("nan")
+    return float(average_precision_score(yt, pp)), float(roc_auc_score(yt, pp))
+
+
 def compute_naive_baselines(
     df: pd.DataFrame,
     full_features: list[str],
@@ -251,7 +295,8 @@ def compute_naive_baselines(
     Contextualise the forecaster against naive baselines (EMBRACE-style).
 
     Rows: no-skill (climatological base rate), persistence (dust tomorrow if dust
-    today), meteorology-only model, and the full model. PR-AUC / ROC-AUC.
+    today), seasonal day-of-year climatology, meteorology-only model, and the
+    full model. PR-AUC / ROC-AUC.
     """
     from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -267,6 +312,9 @@ def compute_naive_baselines(
     persist_ap = average_precision_score(y, persist)
     persist_roc = roc_auc_score(y, persist)
 
+    # Seasonal climatology: out-of-fold day-of-year dust-rate look-up.
+    seas_ap, seas_roc = _seasonal_climatology_oof(df, n_splits=n_splits)
+
     # Meteorology-only model (drop satellite vegetation/albedo and static soil).
     met_groups = {"wind_speed", "wind_direction", "humidity_dryness",
                   "antecedent_moisture", "thermal_blh", "pressure", "seasonality"}
@@ -279,6 +327,8 @@ def compute_naive_baselines(
     rows = [
         {"baseline": "no-skill (base rate)", "pr_auc": base_rate, "roc_auc": 0.5},
         {"baseline": "persistence", "pr_auc": persist_ap, "roc_auc": persist_roc},
+        {"baseline": "seasonal climatology (day-of-year)", "pr_auc": seas_ap,
+         "roc_auc": seas_roc},
         {"baseline": "meteorology-only model", "pr_auc": met["mean_ap"],
          "roc_auc": met["mean_roc"]},
         {"baseline": "full model", "pr_auc": model_results["mean_ap"],
@@ -287,12 +337,41 @@ def compute_naive_baselines(
     return pd.DataFrame(rows)
 
 
+def expected_calibration_error(
+    y_true: np.ndarray, proba: np.ndarray, n_bins: int = 10
+) -> float:
+    """
+    Binned Expected Calibration Error (ECE) with ``n_bins`` equal-width bins.
+
+    ECE = sum_b (|bin_b| / N) * |acc(bin_b) - conf(bin_b)|, the sample-weighted
+    mean gap between predicted confidence and observed frequency. 0 is perfect.
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    proba = np.asarray(proba, dtype=float)
+    n = len(proba)
+    if n == 0:
+        return float("nan")
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    # Assign each probability to a bin in [0, n_bins-1].
+    idx = np.clip(np.digitize(proba, edges[1:-1]), 0, n_bins - 1)
+    ece = 0.0
+    for b in range(n_bins):
+        m = idx == b
+        if not m.any():
+            continue
+        conf = float(proba[m].mean())
+        acc = float(y_true[m].mean())
+        ece += (m.sum() / n) * abs(acc - conf)
+    return float(ece)
+
+
 def operational_metrics(model_results: dict) -> dict[str, Any]:
     """
     Decision-relevant metrics on the out-of-fold probabilities, so a modest
     forecaster can still be judged as a *warning system*:
 
       - Brier score and Brier Skill Score (BSS) vs a climatology forecast
+      - Expected Calibration Error (ECE) of the calibrated probabilities
       - recall achievable at a usable precision (>= 0.30)
       - precision and false-alarm rate at the operating point that catches
         half of all dust days (recall = 0.50)
@@ -310,6 +389,7 @@ def operational_metrics(model_results: dict) -> dict[str, Any]:
     brier = float(brier_score_loss(y, p))
     brier_clim = base * (1 - base)
     bss = 1 - brier / brier_clim if brier_clim > 0 else float("nan")
+    ece = expected_calibration_error(y, p, n_bins=10)
 
     prec, rec, _ = precision_recall_curve(y, p)
     rec_at_p30 = float(rec[prec >= 0.30].max()) if (prec >= 0.30).any() else 0.0
@@ -322,6 +402,7 @@ def operational_metrics(model_results: dict) -> dict[str, Any]:
         "base_rate": base,
         "brier": brier,
         "brier_skill_score": float(bss),
+        "ece": ece,
         "recall_at_precision30": rec_at_p30,
         "precision_at_recall50": prec_at_r50,
         "fpr_at_recall50": fpr_at_r50,
@@ -363,6 +444,132 @@ def seed_robustness(
         "top_delta_mean": float(np.mean(top_delta)),
         "top_delta_sd": float(np.std(top_delta)),
     }
+
+
+def seed_robustness_groups(
+    df: pd.DataFrame,
+    full_features: list[str],
+    groups: dict[str, list[str]],
+    group_names: list[str],
+    seeds: list[int],
+    n_splits: int = 5,
+    xgb_params: dict | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """
+    Seed-robustness for *every* candidate driver group, not just the top one.
+
+    For each group in ``group_names`` the incremental PR-AUC (full − without
+    group) is re-estimated over ``seeds`` random seeds. A group is flagged
+    ``robust_seed`` only if its mean incremental skill stays above zero by at
+    least one standard deviation (mean − sd > 0) — i.e. the effect does not
+    depend on a lucky seed. Returns (per-group table, overall model summary).
+    """
+    from src.models import run_cross_validation
+
+    full_by_seed: dict[int, dict] = {}
+    for s in seeds:
+        full_by_seed[s] = run_cross_validation(
+            df, full_features, n_splits=n_splits, random_state=s,
+            xgb_params=xgb_params, verbose=False,
+        )
+
+    rows = []
+    for g in group_names:
+        reduced = [f for f in full_features if f not in set(groups.get(g, []))]
+        deltas = []
+        for s in seeds:
+            red = run_cross_validation(
+                df, reduced, n_splits=n_splits, random_state=s,
+                xgb_params=xgb_params, verbose=False,
+            )
+            deltas.append(full_by_seed[s]["mean_ap"] - red["mean_ap"])
+        deltas = np.asarray(deltas, dtype=float)
+        rows.append({
+            "group": g,
+            "delta_mean": float(deltas.mean()),
+            "delta_sd": float(deltas.std()),
+            "delta_min": float(deltas.min()),
+            "robust_seed": bool(deltas.mean() - deltas.std() > 0),
+        })
+
+    aps = [full_by_seed[s]["mean_ap"] for s in seeds]
+    rocs = [full_by_seed[s]["mean_roc"] for s in seeds]
+    overall = {
+        "seeds": list(seeds),
+        "ap_mean": float(np.mean(aps)), "ap_sd": float(np.std(aps)),
+        "roc_mean": float(np.mean(rocs)), "roc_sd": float(np.std(rocs)),
+    }
+    return pd.DataFrame(rows), overall
+
+
+def station_jackknife_ablation(
+    df: pd.DataFrame,
+    full_features: list[str],
+    groups: dict[str, list[str]],
+    significant_groups: list[str],
+    n_splits: int = 5,
+    xgb_params: dict | None = None,
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """
+    Leave-one-station-out robustness of the driver-ablation result.
+
+    For each station, the ablation's incremental PR-AUC of every
+    ``significant_groups`` member is recomputed on the dataset with that station
+    *excluded*. A driver whose incremental skill stays positive across all
+    leave-one-station-out subsets is not an artefact of any single station.
+    Returns: group, n_stations_tested, n_positive, frac_positive,
+    min_incremental, max_incremental, mean_incremental.
+    """
+    from sklearn.metrics import average_precision_score
+
+    from src.models import run_cross_validation
+
+    stations = sorted(df["station"].unique())
+    records: dict[str, list[float]] = {g: [] for g in significant_groups}
+
+    for st in stations:
+        sub = df[df["station"] != st]
+        if sub["station"].nunique() < 2:
+            continue
+        full_res = run_cross_validation(
+            sub, full_features, n_splits=n_splits, random_state=random_state,
+            xgb_params=xgb_params, verbose=False,
+        )
+        y_full = np.concatenate(full_res["fold_true"])
+        p_full = np.concatenate(full_res["fold_proba"])
+        if not (0 < y_full.sum() < len(y_full)):
+            continue
+        ap_full = average_precision_score(y_full, p_full)
+        for g in significant_groups:
+            reduced = [f for f in full_features if f not in set(groups.get(g, []))]
+            res = run_cross_validation(
+                sub, reduced, n_splits=n_splits, random_state=random_state,
+                xgb_params=xgb_params, verbose=False,
+            )
+            y_red = np.concatenate(res["fold_true"])
+            p_red = np.concatenate(res["fold_proba"])
+            ap_red = average_precision_score(y_red, p_red)
+            records[g].append(float(ap_full - ap_red))
+
+    rows = []
+    for g, deltas in records.items():
+        arr = np.asarray(deltas, dtype=float)
+        if arr.size == 0:
+            rows.append({"group": g, "n_stations_tested": 0, "n_positive": 0,
+                         "frac_positive": float("nan"), "min_incremental": float("nan"),
+                         "max_incremental": float("nan"), "mean_incremental": float("nan")})
+            continue
+        rows.append({
+            "group": g,
+            "n_stations_tested": int(arr.size),
+            "n_positive": int((arr > 0).sum()),
+            "frac_positive": float((arr > 0).mean()),
+            "min_incremental": float(arr.min()),
+            "max_incremental": float(arr.max()),
+            "mean_incremental": float(arr.mean()),
+        })
+    return pd.DataFrame(rows)
 
 
 def plot_calibration(results: dict, output_dir: str | Path = "outputs") -> None:
@@ -487,6 +694,8 @@ def write_report(
     seed_robust: dict | None = None,
     operational: dict | None = None,
     loso: dict | None = None,
+    seed_robust_table: "pd.DataFrame | None" = None,
+    station_jack: "pd.DataFrame | None" = None,
 ) -> None:
     """Write the markdown results report for the driver study."""
     output_path = Path(output_path)
@@ -601,6 +810,7 @@ def write_report(
                 "|----------|-------|",
                 f"| Brier score | {o['brier']:.4f} |",
                 f"| Brier Skill Score (vs climatology) | {o['brier_skill_score']:+.3f} |",
+                f"| Expected Calibration Error (10-bin) | {o.get('ece', float('nan')):.4f} |",
                 f"| Recall at precision ≥ 0.30 | {o['recall_at_precision30']:.2f} |",
                 f"| Precision at recall = 0.50 | {o['precision_at_recall50']:.2f} |",
                 f"| False-alarm rate at recall = 0.50 | {o['fpr_at_recall50']:.2f} |",
@@ -649,12 +859,59 @@ def write_report(
             f"{r['p_fdr']:.3f} | {'**yes**' if r['significant_fdr'] else 'no'} |"
         )
     top_row = ablation_df.iloc[0]
+
+    # --- Robustness synthesis: a driver is only called "robust" if it passes
+    # FDR correction AND seed-robustness (mean − sd > 0 across seeds) AND
+    # station-jackknife sign-consistency (positive on >= 80% of
+    # leave-one-station-out subsets). Drivers that pass FDR but fail either
+    # additional check are downgraded to "FDR-significant but not fully robust".
+    seed_ok: dict[str, bool] = {}
+    if seed_robust_table is not None and not seed_robust_table.empty:
+        seed_ok = dict(zip(seed_robust_table["group"], seed_robust_table["robust_seed"]))
+    jack_ok: dict[str, bool] = {}
+    if station_jack is not None and not station_jack.empty:
+        jack_ok = {
+            r["group"]: bool(r["frac_positive"] >= 0.8)
+            for _, r in station_jack.iterrows()
+            if not np.isnan(r["frac_positive"])
+        }
+    have_extra = bool(seed_ok) or bool(jack_ok)
+
+    def _is_robust(g: str) -> bool:
+        # Require every *available* extra check to pass (conservative).
+        ok = True
+        if seed_ok:
+            ok = ok and bool(seed_ok.get(g, False))
+        if jack_ok:
+            ok = ok and bool(jack_ok.get(g, False))
+        return ok
+
+    sig_groups = sig["group"].tolist()
+    robust_groups = [g for g in sig_groups if _is_robust(g)]
+    fragile_groups = [g for g in sig_groups if not _is_robust(g)]
+
     if not sig.empty:
-        drivers = ", ".join(sig["group"].tolist())
         lines += [
             "",
-            f"**Driver groups significant after FDR correction:** {drivers}.",
+            f"**Driver groups significant after FDR correction:** "
+            f"{', '.join(sig_groups)}.",
         ]
+        if have_extra:
+            if robust_groups:
+                lines.append(
+                    f"Of these, **{', '.join(robust_groups)}** "
+                    f"{'is' if len(robust_groups) == 1 else 'are'} *fully robust* "
+                    "— significant after FDR **and** stable across random seeds "
+                    "**and** sign-consistent under station jackknife."
+                )
+            if fragile_groups:
+                lines.append(
+                    f"**{', '.join(fragile_groups)}** "
+                    f"{'is' if len(fragile_groups) == 1 else 'are'} "
+                    "FDR-significant but **not fully robust** (fails the seed "
+                    "and/or station-jackknife check), so should be read as "
+                    "suggestive rather than established."
+                )
     else:
         lines += [
             "",
@@ -664,13 +921,48 @@ def write_report(
             f"{top_row['p_value']:.3f}, FDR p={top_row['p_fdr']:.3f}) — "
             "suggestive but not confirmed at this sample size.",
         ]
-    if seed_robust is not None:
+
+    # Per-driver seed robustness table (all candidate drivers).
+    if seed_robust_table is not None and not seed_robust_table.empty:
         lines += [
             "",
-            f"Seed robustness of the top driver "
-            f"(ΔPR-AUC over {len(seed_robust['seeds'])} seeds): "
-            f"{seed_robust['top_delta_mean']:+.4f} ± {seed_robust['top_delta_sd']:.4f}.",
+            "### Seed robustness of candidate drivers",
+            "",
+            "Incremental PR-AUC of each candidate driver re-estimated over "
+            f"{len(seed_robust['seeds']) if seed_robust else len(seed_robust_table)} "
+            "random training seeds. `robust_seed` requires mean − sd > 0.",
+            "",
+            "| Driver group | ΔPR-AUC mean | sd | min | robust |",
+            "|--------------|--------------|----|-----|--------|",
         ]
+        for _, r in seed_robust_table.iterrows():
+            lines.append(
+                f"| {r['group']} | {r['delta_mean']:+.4f} | {r['delta_sd']:.4f} | "
+                f"{r['delta_min']:+.4f} | {'yes' if r['robust_seed'] else 'no'} |"
+            )
+        lines.append("")
+
+    # Station-jackknife sign-consistency of the candidate drivers.
+    if station_jack is not None and not station_jack.empty:
+        lines += [
+            "### Station-jackknife robustness of candidate drivers",
+            "",
+            "Each candidate driver's incremental PR-AUC recomputed with each "
+            "station removed in turn. `frac_positive` is the share of "
+            "leave-one-station-out subsets on which the driver still adds skill.",
+            "",
+            "| Driver group | LOSO subsets | positive | frac positive | min Δ | max Δ |",
+            "|--------------|--------------|----------|---------------|-------|-------|",
+        ]
+        for _, r in station_jack.iterrows():
+            fp = "—" if np.isnan(r["frac_positive"]) else f"{r['frac_positive']:.2f}"
+            mn = "—" if np.isnan(r["min_incremental"]) else f"{r['min_incremental']:+.4f}"
+            mx = "—" if np.isnan(r["max_incremental"]) else f"{r['max_incremental']:+.4f}"
+            lines.append(
+                f"| {r['group']} | {int(r['n_stations_tested'])} | "
+                f"{int(r['n_positive'])} | {fp} | {mn} | {mx} |"
+            )
+        lines.append("")
     lines.append("")
 
     # Per-station performance
@@ -713,16 +1005,30 @@ def write_report(
         f"{pos_rate / 100:.3f}. "
     )
     if not sig.empty:
-        drivers = ", ".join(sig["group"].tolist())
         top = sig.iloc[0]
-        lines.append(
-            intro + f"After Benjamini-Hochberg FDR correction across the driver "
-            f"groups, **{drivers}** retain{'s' if len(sig) == 1 else ''} "
-            f"statistically significant incremental skill, with **{top['group']}** "
-            f"the strongest (ΔPR-AUC {top['incremental_pr_auc']:+.4f}, FDR "
-            f"p={top['p_fdr']:.3f}). Remaining groups carry information already "
-            "present elsewhere in the feature set."
+        emphasis = robust_groups if (have_extra and robust_groups) else sig_groups
+        label = (
+            "carry incremental skill that survives FDR correction, seed "
+            "re-estimation, and station jackknife"
+            if (have_extra and robust_groups)
+            else "retain statistically significant incremental skill after "
+            "Benjamini-Hochberg FDR correction"
         )
+        sentence = (
+            intro + f"After multiple-comparison correction, **{', '.join(emphasis)}** "
+            f"{label}, with **{top['group']}** the strongest "
+            f"(ΔPR-AUC {top['incremental_pr_auc']:+.4f}, FDR p={top['p_fdr']:.3f}). "
+            "Remaining groups carry information already present elsewhere in the "
+            "feature set."
+        )
+        if have_extra and fragile_groups:
+            sentence += (
+                f" **{', '.join(fragile_groups)}** clear{'s' if len(fragile_groups) == 1 else ''} "
+                "FDR but not the seed/station checks, so "
+                f"{'it is' if len(fragile_groups) == 1 else 'they are'} reported "
+                "as suggestive only."
+            )
+        lines.append(sentence)
     else:
         lines.append(
             intro + f"After Benjamini-Hochberg FDR correction across the driver "

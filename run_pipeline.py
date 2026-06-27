@@ -3,8 +3,8 @@
 Master pipeline: data acquisition -> features -> labels -> XGBoost CV -> statistics.
 
 Usage:
-  python run_pipeline.py                    # synthetic data (default)
-  python run_pipeline.py --mode real        # requires GEE, CDS, ISD credentials
+  python run_pipeline.py                    # synthetic data (default, no keys)
+  python run_pipeline.py --mode real        # keyless live data (Open-Meteo/ORNL/ISD/SoilGrids)
   python run_pipeline.py --tune             # enable Optuna hyperparameter search
 """
 
@@ -30,7 +30,8 @@ from src.evaluation import (  # noqa: E402
     plot_feature_importance,
     plot_pr_curve,
     run_group_ablation,
-    seed_robustness,
+    seed_robustness_groups,
+    station_jackknife_ablation,
     write_report,
 )
 from src.features import (  # noqa: E402
@@ -192,11 +193,6 @@ def main() -> None:
         help="Run Optuna hyperparameter tuning on full model",
     )
     parser.add_argument(
-        "--station-cv",
-        action="store_true",
-        help="Also run leave-one-station-out GroupKFold CV",
-    )
-    parser.add_argument(
         "--stations",
         nargs="+",
         default=None,
@@ -237,7 +233,7 @@ def main() -> None:
     print("=" * 60)
 
     # --- Step 1: Build dataset ---
-    print("\n[1/4] Building master dataset...")
+    print("\n[1/5] Building master dataset...")
     if mode == "synthetic":
         df = build_dataset_from_synthetic(config)
         full_features = FULL_FEATURES
@@ -270,7 +266,7 @@ def main() -> None:
         print(f"  Best params: {xgb_params}")
 
     # --- Step 2: Forecast-model cross-validation ---
-    print("\n[2/4] Cross-validating the forecast model...")
+    print("\n[2/5] Cross-validating the forecast model...")
     model_results = run_cross_validation(
         df,
         full_features,
@@ -289,7 +285,7 @@ def main() -> None:
     # Generalization to entirely unseen stations (leave-one-station-out).
     loso = None
     if df["station"].nunique() >= 3:
-        print("[2/5] Leave-one-station-out generalization...")
+        print("      Leave-one-station-out generalization...")
         loso = run_cross_validation(
             df, full_features, cv_strategy="station",
             random_state=random_state, xgb_params=xgb_params, verbose=False,
@@ -312,22 +308,39 @@ def main() -> None:
         full_results=model_results,
     )
 
-    print("[3/5] Naive baselines...")
+    print("      Naive baselines...")
     baselines_df = compute_naive_baselines(
         df, full_features, model_results, n_splits=n_splits,
         xgb_params=xgb_params, random_state=random_state,
     )
 
-    print("[3/5] Seed robustness...")
+    # Candidate drivers to scrutinise: the FDR-significant ones, or (if none
+    # survive) the single strongest, so the robustness checks always run.
     groups = build_feature_groups(full_features)
-    top_group = ablation_df.iloc[0]["group"]
+    sig_mask = ablation_df["significant_fdr"]
+    candidate_groups = (
+        ablation_df.loc[sig_mask, "group"].tolist()
+        if sig_mask.any()
+        else [ablation_df.iloc[0]["group"]]
+    )
+
+    print("      Seed robustness (all candidate drivers)...")
     seeds = [random_state + i for i in range(config["model"].get("n_seeds", 5))]
-    seed_robust = seed_robustness(
-        df, full_features, groups[top_group], seeds,
+    seed_robust_table, seed_robust = seed_robustness_groups(
+        df, full_features, groups, candidate_groups, seeds,
         n_splits=n_splits, xgb_params=xgb_params,
     )
 
-    print("[3/5] Operational metrics...")
+    # Station-jackknife of the candidate drivers (transfer across stations).
+    station_jack = None
+    if df["station"].nunique() >= 3:
+        print("      Station-jackknife of candidate drivers...")
+        station_jack = station_jackknife_ablation(
+            df, full_features, groups, candidate_groups,
+            n_splits=n_splits, xgb_params=xgb_params, random_state=random_state,
+        )
+
+    print("      Operational metrics...")
     operational = operational_metrics(model_results)
 
     # --- Step 4: Figures ---
@@ -353,6 +366,8 @@ def main() -> None:
         seed_robust=seed_robust,
         operational=operational,
         loso=loso,
+        seed_robust_table=seed_robust_table,
+        station_jack=station_jack,
     )
 
     print("\n" + "=" * 60)

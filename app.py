@@ -116,22 +116,27 @@ tab1, tab2, tab3, tab4 = st.tabs(
 with tab1:
     st.subheader("What the study found")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Robust drivers (real)", "3 groups", "humidity · vegetation · seasonality")
-    c2.metric("Forecast skill", "ROC-AUC 0.69", "PR-AUC 0.13 · BSS +0.012")
+    c1.metric("Fully robust driver (real)", "1 group", "humidity/dryness (dry air)")
+    c2.metric("Forecast skill", "ROC-AUC 0.69", "PR-AUC 0.13 · BSS +0.012 · ECE 0.005")
     c3.metric("Stations", "6", "6,570 station-days")
     st.markdown(
         """
 A systematic, FDR-corrected *driver ablation* across **6 Saudi stations** ranks
 each satellite and reanalysis driver group by its incremental forecasting skill.
-Three groups survive multiple-comparison correction: **humidity/dryness,
-vegetation cover (NDVI) and seasonality** — physically, dry air over a bare,
-erodible surface during the dust season.
+Three groups survive multiple-comparison correction — **humidity/dryness,
+vegetation cover (NDVI) and seasonality** — but each is then stress-tested across
+random seeds and across stations, and **only humidity/dryness (dry air) is fully
+robust**: positive on every seed *and* sign-consistent when any single station is
+held out. Vegetation and seasonality clear FDR but fail those checks, so they are
+reported as **suggestive, not established**. (A standalone day-of-year climatology
+scores PR-AUC 0.061 — barely above no-skill — consistent with seasonality being
+only suggestive.)
 
 The result **generalizes to unseen stations** (leave-one-station-out PR-AUC 0.159,
 matching the within-station figure). Honest caveat: *absolute* skill is modest and
 the operating points are weak (catching half of all dust days costs a ~38%
-false-alarm rate), so this is a reproducible, generalizable **baseline with robust
-driver attribution**, not a deployable warning system.
+false-alarm rate), so this is a reproducible, generalizable **baseline with one
+robust driver attribution**, not a deployable warning system.
 
 This live demo trains on the project's **synthetic** generator (self-contained,
 no keys) so you can interact with the model. The real-data numbers above come

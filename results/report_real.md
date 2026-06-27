@@ -50,6 +50,7 @@ The forecaster against simple references (out-of-fold where a model is involved)
 |-----------|--------|---------|
 | no-skill (base rate) | 0.0559 | 0.5000 |
 | persistence | 0.1000 | 0.5974 |
+| seasonal climatology (day-of-year) | 0.0614 | 0.6071 |
 | meteorology-only model | 0.1079 | 0.6874 |
 | full model | 0.1253 | 0.6860 |
 
@@ -61,6 +62,7 @@ Judging the probabilities as a warning system (out-of-fold):
 |----------|-------|
 | Brier score | 0.0439 |
 | Brier Skill Score (vs climatology) | +0.012 |
+| Expected Calibration Error (10-bin) | 0.0053 |
 | Recall at precision ≥ 0.30 | 0.04 |
 | Precision at recall = 0.50 | 0.06 |
 | False-alarm rate at recall = 0.50 | 0.38 |
@@ -85,8 +87,29 @@ Incremental skill of each physical driver group: the change in PR-AUC when that 
 | wind_direction | 3 | -0.0011 | [-0.0161, +0.0157] | 0.873 | 0.873 | no |
 
 **Driver groups significant after FDR correction:** humidity_dryness, vegetation, seasonality.
+Of these, **humidity_dryness** is *fully robust* — significant after FDR **and** stable across random seeds **and** sign-consistent under station jackknife.
+**vegetation, seasonality** are FDR-significant but **not fully robust** (fails the seed and/or station-jackknife check), so should be read as suggestive rather than established.
 
-Seed robustness of the top driver (ΔPR-AUC over 5 seeds): +0.0228 ± 0.0108.
+### Seed robustness of candidate drivers
+
+Incremental PR-AUC of each candidate driver re-estimated over 5 random training seeds. `robust_seed` requires mean − sd > 0.
+
+| Driver group | ΔPR-AUC mean | sd | min | robust |
+|--------------|--------------|----|-----|--------|
+| humidity_dryness | +0.0228 | 0.0108 | +0.0025 | yes |
+| vegetation | +0.0054 | 0.0080 | -0.0058 | no |
+| seasonality | +0.0083 | 0.0118 | -0.0089 | no |
+
+### Station-jackknife robustness of candidate drivers
+
+Each candidate driver's incremental PR-AUC recomputed with each station removed in turn. `frac_positive` is the share of leave-one-station-out subsets on which the driver still adds skill.
+
+| Driver group | LOSO subsets | positive | frac positive | min Δ | max Δ |
+|--------------|--------------|----------|---------------|-------|-------|
+| humidity_dryness | 6 | 6 | 1.00 | +0.0065 | +0.0245 |
+| vegetation | 6 | 3 | 0.50 | -0.0126 | +0.0099 |
+| seasonality | 6 | 3 | 0.50 | -0.0087 | +0.0042 |
+
 
 ## Per-Station Performance
 
@@ -108,4 +131,4 @@ Seed robustness of the top driver (ΔPR-AUC over 5 seeds): +0.0228 ± 0.0108.
 
 ## Conclusion
 
-The forecaster attains a cross-validated PR-AUC of 0.125 (ROC-AUC 0.686) at a 5.6% base rate, well above the no-skill PR-AUC of 0.056. After Benjamini-Hochberg FDR correction across the driver groups, **humidity_dryness, vegetation, seasonality** retain statistically significant incremental skill, with **humidity_dryness** the strongest (ΔPR-AUC +0.0364, FDR p=0.005). Remaining groups carry information already present elsewhere in the feature set.
+The forecaster attains a cross-validated PR-AUC of 0.125 (ROC-AUC 0.686) at a 5.6% base rate, well above the no-skill PR-AUC of 0.056. After multiple-comparison correction, **humidity_dryness** carry incremental skill that survives FDR correction, seed re-estimation, and station jackknife, with **humidity_dryness** the strongest (ΔPR-AUC +0.0364, FDR p=0.005). Remaining groups carry information already present elsewhere in the feature set. **vegetation, seasonality** clear FDR but not the seed/station checks, so they are reported as suggestive only.
